@@ -7,8 +7,8 @@
  * shape the in-Grafana panel script consumes via genericParser /
  * getOfflineMetricData / getPcOver15DetailData.
  *
- * Queries are transcribed verbatim from Grafana_Incidents-main/query.md
- * (refIds A..Z). For each Prometheus vector entry we build:
+ * Queries are transcribed from Grafana/query.md (refIds A..Z, incl. W).
+ * For each Prometheus vector entry we build:
  *
  *   {
  *     refId,
@@ -105,6 +105,15 @@
       '  (count_over_time(device_ping_status_pc_test{device_type!="Printer"}[$__range])\n' +
       '   - sum_over_time(device_ping_status_pc_test[$__range])) / 2\n' +
       ') or vector(0)'
+    },
+    // Per-hostname price checkers down ≥15m in [$__range] (Grafana refId W; store-level
+    // aggregate is refId V in query.md). Keeps store + hostname for getPcOver15DetailData.
+    { refId: 'W', kind: 'offline', expr:
+      '(\n' +
+      '  min_over_time(\n' +
+      '    avg_over_time(device_ping_status_pc_test{device_type=~"PriceChecker"}[15m])[$__range:1m]\n' +
+      '  ) == 0\n' +
+      ')'
     },
     { refId: 'X', kind: 'offline', expr:
       'sum_over_time(\n' +
