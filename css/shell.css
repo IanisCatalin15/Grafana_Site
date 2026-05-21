@@ -1,0 +1,1209 @@
+/* =============================================================================
+   Aurora shell — sidebar, topbar, segmented stat row, responsive layout.
+   Sits on top of the verbatim panel style.css; does not replace it.
+   ============================================================================= */
+
+:root {
+  --shell-bg: #0b0e14;
+  --shell-surface: #12161f;
+  --shell-surface-2: #1a2030;
+  --shell-border: rgba(255, 255, 255, 0.08);
+  --shell-text: #e8eaef;
+  --shell-muted: #8b93a7;
+  --shell-accent: #3b82f6;
+  --shell-accent-soft: rgba(59, 130, 246, 0.15);
+  --shell-danger: #ef4444;
+  --shell-warning: #f59e0b;
+  --shell-success: #22c55e;
+  --shell-sidebar-w: 240px;
+  --shell-sidebar-rail: 48px;
+  --shell-topbar-h: 64px;
+  --shell-radius: 10px;
+  --shell-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--shell-bg);
+  color: var(--shell-text);
+}
+
+/* Hide legacy nav controls — shell replaces them */
+#panelRoot .page-nav-header,
+#panelRoot #device-type-selector,
+#panelRoot #offline-time-button {
+  display: none !important;
+}
+
+/* Keep the original panel's "Internet Status" / "Offline Devices" summary
+   (rendered into #overview-store-totals-box by script.js). Our shell-stat-row
+   was a duplicate, so hide that one instead. */
+#panelRoot #shell-stat-row {
+  display: none !important;
+}
+
+/* App shell layout */
+.app-shell {
+  display: flex;
+  align-items: stretch;
+  height: 100vh;
+  width: 100%;
+  overflow: hidden;
+}
+
+.app-main {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.app-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+#panelRoot.stores-container.panel {
+  max-width: none;
+  width: 100%;
+  margin: 0;
+  padding: 16px 20px 32px;
+  box-sizing: border-box;
+}
+
+/* Sidebar */
+.app-sidebar {
+  flex: 0 0 var(--shell-sidebar-w);
+  width: var(--shell-sidebar-w);
+  display: flex;
+  flex-direction: column;
+  /* Opal / frosted-glass surface so the sidebar no longer reads as a hard
+     black border. Lifts subtly off the page bg via a soft shadow + inner
+     highlight; the gradient adds a low-key sheen across the rail. */
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.012) 38%, rgba(255, 255, 255, 0.0) 100%),
+    linear-gradient(180deg, rgba(26, 32, 48, 0.78) 0%, rgba(18, 24, 38, 0.82) 100%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  backdrop-filter: blur(18px) saturate(140%);
+  border-right: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow:
+    inset -1px 0 0 rgba(255, 255, 255, 0.04),
+    6px 0 24px rgba(0, 0, 0, 0.28);
+  height: 100vh;
+  overflow: hidden;
+  z-index: 200;
+  transition: flex-basis 0.2s, width 0.2s;
+}
+
+.app-sidebar__brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: var(--shell-topbar-h);
+  padding: 0 10px;
+  border-bottom: 1px solid var(--shell-border);
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+.app-sidebar__logo {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  background: linear-gradient(135deg, #22c55e 0%, #3b82f6 100%);
+  flex: 0 0 20px;
+}
+
+.app-sidebar__title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.app-sidebar__subtitle {
+  font-size: 10px;
+  color: var(--shell-muted);
+  font-weight: 500;
+  letter-spacing: 0.06em;
+}
+
+.app-sidebar__nav {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 10px 12px;
+}
+
+.app-sidebar__footer {
+  padding: 10px;
+  border-top: 1px solid var(--shell-border);
+  flex-shrink: 0;
+}
+
+.app-sidebar__collapse {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--shell-border);
+  border-radius: 8px;
+  background: var(--shell-surface-2);
+  color: var(--shell-muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.app-sidebar__collapse:hover {
+  background: var(--shell-accent-soft);
+  color: #93c5fd;
+}
+
+.app-sidebar__collapse i {
+  font-size: 13px;
+}
+
+.app-sidebar__group-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--shell-muted);
+  padding: 14px 10px 6px;
+  margin: 0;
+}
+
+.app-sidebar__divider {
+  border: 0;
+  border-top: 1px solid var(--shell-border);
+  margin: 8px 12px;
+}
+
+.app-sidebar__item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  height: 36px;
+  padding: 0 10px;
+  margin-bottom: 2px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--shell-text);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  text-align: left;
+  cursor: pointer;
+  box-sizing: border-box;
+  transition: background 0.15s, color 0.15s;
+}
+
+.app-sidebar__item:hover {
+  background: var(--shell-surface-2);
+}
+
+.app-sidebar__item.is-active {
+  background: var(--shell-accent-soft);
+  color: #93c5fd;
+}
+
+.app-sidebar__item i {
+  flex: 0 0 20px;
+  width: 20px;
+  text-align: center;
+  font-size: 15px;
+  line-height: 1;
+  opacity: 0.9;
+}
+
+.app-sidebar__item i.fa-fw {
+  width: 20px;
+}
+
+.app-sidebar__item span {
+  flex: 1;
+  min-width: 0;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-sidebar-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 190;
+}
+
+.app-sidebar-backdrop.is-visible {
+  display: block;
+}
+
+/* Collapsed sidebar — narrow the rail just enough to clip the text. The icons
+   keep the SAME left padding as in expanded mode so they don't visibly move
+   when you expand/collapse; only the text appears/disappears to the right. */
+@media (min-width: 768px) {
+  .app-shell.is-sidebar-collapsed .app-sidebar {
+    flex: 0 0 var(--shell-sidebar-rail);
+    width: var(--shell-sidebar-rail);
+  }
+
+  /* Hide all text content — icons (and the category divider) stay put. */
+  .app-shell.is-sidebar-collapsed .app-sidebar__brand-text,
+  .app-shell.is-sidebar-collapsed .app-sidebar__group-label,
+  .app-shell.is-sidebar-collapsed .app-sidebar__item span,
+  .app-shell.is-sidebar-collapsed .app-sidebar__collapse-label {
+    display: none;
+  }
+
+  .app-shell.is-sidebar-collapsed .app-sidebar__divider {
+    margin-left: 6px;
+    margin-right: 16px;
+  }
+
+  /* Brand keeps the same vertical/horizontal anchor — same as expanded. */
+  .app-shell.is-sidebar-collapsed .app-sidebar__brand {
+    padding: 0 10px;
+  }
+}
+
+/* Topbar */
+.app-topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: var(--shell-topbar-h);
+  min-height: var(--shell-topbar-h);
+  padding: 0 20px;
+  /* Match the sidebar opal surface so the top strip doesn't read as a
+     solid black bar above the page. Soft drop shadow gives depth without
+     introducing a hard horizontal line. */
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.018) 60%, rgba(255, 255, 255, 0.0) 100%),
+    linear-gradient(180deg, rgba(26, 32, 48, 0.78) 0%, rgba(18, 24, 38, 0.82) 100%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  backdrop-filter: blur(18px) saturate(140%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow:
+    inset 0 -1px 0 rgba(255, 255, 255, 0.04),
+    0 6px 24px rgba(0, 0, 0, 0.28);
+  flex-shrink: 0;
+  z-index: 100;
+}
+
+.app-topbar__menu {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--shell-border);
+  border-radius: 8px;
+  background: var(--shell-surface-2);
+  color: var(--shell-text);
+  cursor: pointer;
+}
+
+.app-topbar__title {
+  flex: 1;
+  min-width: 0;
+  font-size: 18px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-topbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.app-topbar__actions .time-range-button {
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 14px !important;
+  border-radius: 8px !important;
+  background: var(--shell-surface-2) !important;
+  border: 1px solid var(--shell-border) !important;
+  font-size: 13px !important;
+}
+
+.app-topbar__auto {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--shell-border);
+  background: var(--shell-surface-2);
+  color: var(--shell-muted);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  font-family: inherit;
+  line-height: 1;
+  user-select: none;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.05s;
+}
+
+.app-topbar__auto:hover {
+  background: var(--shell-accent-soft);
+  border-color: rgba(59, 130, 246, 0.35);
+  color: var(--shell-text);
+}
+
+.app-topbar__auto:focus-visible {
+  outline: 2px solid rgba(59, 130, 246, 0.55);
+  outline-offset: 2px;
+}
+
+.app-topbar__auto:active {
+  transform: scale(0.97);
+}
+
+.app-topbar__auto[aria-busy="true"] {
+  opacity: 0.75;
+  pointer-events: none;
+  border-color: rgba(34, 197, 94, 0.4);
+  color: var(--shell-text);
+}
+
+.app-topbar__auto i {
+  font-size: 13px;
+  color: var(--shell-success);
+  animation: gfn-auto-spin 6s linear infinite;
+}
+
+.app-topbar__auto:hover i {
+  animation-duration: 2.5s;
+}
+
+.app-topbar__auto[aria-busy="true"] i {
+  animation-duration: 0.7s;
+}
+
+.app-topbar__auto-label {
+  white-space: nowrap;
+}
+
+@keyframes gfn-auto-spin {
+  to { transform: rotate(360deg); }
+}
+
+.app-topbar__refresh {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 1px solid var(--shell-border);
+  background: var(--shell-surface-2);
+  color: var(--shell-text);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.app-topbar__refresh:hover {
+  background: var(--shell-accent-soft);
+}
+
+.app-topbar__refresh[aria-busy="true"] {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* Overview band: we use only the original panel's .stats-header (left-aligned,
+   full width). Our duplicate #shell-stat-row is hidden. */
+.shell-overview-band {
+  display: block;
+  margin-bottom: 16px;
+}
+
+.shell-overview-band .stats-header.shell-stat-row-overview {
+  margin: 0;
+}
+
+.shell-stat-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-bottom: 0;
+}
+
+.shell-stat-card {
+  background: var(--shell-surface);
+  border: 1px solid var(--shell-border);
+  border-radius: var(--shell-radius);
+  padding: 14px 16px;
+}
+
+.shell-stat-card h3 {
+  margin: 0 0 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--shell-muted);
+}
+
+.shell-stat-card__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.shell-stat-row-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  /* Pure decorative tile — no interaction, no text selection highlight,
+     no native focus ring even if a stray tab lands on it. */
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.shell-stat-row-item:focus,
+.shell-stat-row-item:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+/* Same treatment for the dynamic overview tiles rendered by script.js
+   into #total-stores / #overview-store-totals. */
+#panelRoot .internet-summary-row,
+#panelRoot .overview-metric-item {
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#panelRoot .internet-summary-row:focus,
+#panelRoot .internet-summary-row:focus-visible,
+#panelRoot .overview-metric-item:focus,
+#panelRoot .overview-metric-item:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+.shell-stat-row-item__label {
+  color: var(--shell-muted);
+}
+
+.shell-stat-row-item__value {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.shell-stat-row-item__value.is-warn {
+  color: var(--shell-warning);
+}
+
+.shell-stat-row-item__value.is-danger {
+  color: var(--shell-danger);
+}
+
+.shell-stat-row-item__value.is-ok {
+  color: var(--shell-success);
+}
+
+.shell-stat-row-item__suffix {
+  font-size: 12px;
+  color: var(--shell-muted);
+  margin-left: 4px;
+}
+
+/* Panel overview totals slot — keep visible in stat row area on Live */
+#panelRoot .stats-header {
+  margin-bottom: 12px;
+}
+
+/* Time range modal — cleaner layout */
+#time-range-modal.time-range-modal,
+#date-picker-modal.date-picker-modal {
+  z-index: 10000;
+}
+
+#date-picker-modal .date-picker-day.in-range {
+  background: rgba(59, 130, 246, 0.16);
+  border-color: rgba(59, 130, 246, 0.32);
+}
+
+#date-picker-modal .date-picker-day.selected-start,
+#date-picker-modal .date-picker-day.selected-end {
+  background: rgba(59, 130, 246, 0.46);
+  border-color: #60a5fa;
+}
+
+#time-range-modal .time-range-content {
+  max-width: 720px !important;
+  width: min(720px, calc(100vw - 32px)) !important;
+  border-radius: 14px !important;
+  border: 1px solid var(--shell-border) !important;
+  box-shadow: var(--shell-shadow) !important;
+}
+
+#time-range-modal .time-range-sections {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr !important;
+  gap: 20px !important;
+}
+
+#time-range-modal .time-option {
+  min-height: 44px !important;
+  padding: 10px 14px !important;
+  border-radius: 8px !important;
+  font-size: 14px !important;
+}
+
+#time-range-modal .current-selection-preview {
+  grid-column: 1 / -1;
+}
+
+#time-range-modal .time-range-help {
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+#date-picker-modal .date-picker-content {
+  max-width: 400px !important;
+  border-radius: 14px !important;
+  border: 1px solid var(--shell-border) !important;
+}
+
+/* Stores grid responsive */
+#panelRoot .stores-grid {
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)) !important;
+  gap: 10px !important;
+}
+
+/* Night-freeze banner: signals that Prometheus has paused scraping and the
+   tiles below are a frozen snapshot from the last monitoring window cutoff
+   (~21:00 Europe/Bucharest). Amber accent so it reads as a warning, not an
+   error; sits between the top control bar and the dashboard body. */
+.night-freeze-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 20px 12px;
+  padding: 8px 14px;
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06) 0%, rgba(255, 255, 255, 0.01) 100%),
+    rgba(180, 83, 9, 0.22);
+  border: 1px solid rgba(245, 158, 11, 0.42);
+  color: rgba(253, 224, 145, 0.98);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  box-shadow: 0 2px 12px rgba(180, 83, 9, 0.18);
+}
+
+.night-freeze-badge::before {
+  content: '\f017';
+  font-family: 'Font Awesome 6 Free', 'Font Awesome 5 Free', sans-serif;
+  font-weight: 900;
+  font-size: 13px;
+  color: rgba(252, 211, 77, 0.95);
+}
+
+/* Force device & incident cards into a horizontal flow grid. The legacy
+   widths (272px min) were stacking single-column on narrower viewports — push
+   them tighter so we always get multiple cards per row. */
+#panelRoot .stores-grid.stores-grid--unreported,
+#panelRoot .grouped-device-grid--incident {
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)) !important;
+  gap: 10px !important;
+}
+
+#panelRoot .stores-grid.grouped-sections .grouped-device-grid {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)) !important;
+  gap: 10px !important;
+}
+
+#panelRoot .stores-grid.grouped-sections {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 14px !important;
+}
+
+/* ============================================================================
+   Incidents page (Live unreported): Excel-style list mode with column headers.
+   The three sections (Unreported / Reported / Solved) stack vertically; each
+   one renders a header row + cards as horizontal rows on a shared 5-column
+   grid template. Everything is centered per column.
+   ============================================================================ */
+
+:root {
+  --incident-cols: 90px minmax(0, 1fr) 130px 130px 130px;
+  --incident-row-pad-y: 6px;
+  --incident-row-pad-x: 12px;
+}
+
+/* Section container: rows stacked, table-like frame.
+   Keep these selectors tied to the incident section/body themselves, not to a
+   fragile parent class. The 30s auto-refresh can re-render this area without
+   updateMainView running immediately before it. */
+#panelRoot .grouped-device-section[data-incident-section] > .grouped-device-grid--incident,
+#panelRoot .stores-grid.grouped-device-grid--incident {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 0 !important;
+  grid-template-columns: none !important;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  overflow: hidden;
+  background: rgba(15, 23, 42, 0.35);
+}
+
+/* ---- Sticky column header per list ---- */
+#panelRoot .grouped-device-grid--incident .incident-list-header {
+  display: grid !important;
+  grid-template-columns: var(--incident-cols);
+  align-items: center;
+  gap: 8px;
+  padding: 8px var(--incident-row-pad-x);
+  background: rgba(30, 41, 59, 0.7);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: rgba(199, 210, 254, 0.85);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+#panelRoot .grouped-device-grid--incident .incident-list-header-cell {
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- Each card → one data row on the shared 5-column grid ---- */
+#panelRoot .grouped-device-grid--incident .unreported-live-card {
+  width: 100% !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: var(--incident-row-pad-y) var(--incident-row-pad-x) !important;
+  border-radius: 0 !important;
+  border: none !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06) !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  transition: background-color 120ms ease;
+}
+
+#panelRoot .grouped-device-grid--incident .unreported-live-card:nth-child(even) {
+  background: rgba(255, 255, 255, 0.025) !important;
+}
+
+#panelRoot .grouped-device-grid--incident .unreported-live-card:hover {
+  background: rgba(99, 102, 241, 0.12) !important;
+}
+
+#panelRoot .grouped-device-grid--incident .unreported-live-card:last-child {
+  border-bottom: none !important;
+}
+
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-inner {
+  display: grid !important;
+  grid-template-columns: var(--incident-cols);
+  grid-auto-rows: minmax(0, max-content) !important;
+  align-items: center !important;
+  gap: 8px !important;
+  width: 100%;
+  min-width: 0;
+  /* Cancel the legacy card padding from style.css (15/16/14/16) — in
+     list mode the row already gets vertical padding from the card itself. */
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+/* Lift nested wrappers so their children become direct grid items, then
+   place each leaf in its column with grid-column. */
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-head,
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-timeline,
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-top,
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-top-left,
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-ticket-meta {
+  display: contents !important;
+}
+
+/* Defensive: a few engines still let margin / padding / border bleed from
+   `display: contents` elements. Zero them so nothing pushes adjacent cells. */
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-head,
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-timeline,
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-top,
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-top-left,
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-ticket-meta {
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+
+/* Every direct grid item in a row lives on row 1, vertically centered, so
+   no stray legacy style (.unreported-live-ticket-meta margin-top: 10px,
+   .unreported-live-top margin-bottom: 10px, .unreported-live-top-right
+   align-items: flex-end, etc.) can push a cell up or down. */
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-inner > *,
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-code,
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-title,
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-time,
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-end,
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-dur-compact,
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-reported-at,
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-solved-at,
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-ticket-owner,
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-issue-kind,
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-top-right,
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-ticket-link {
+  grid-row: 1 !important;
+  align-self: center !important;
+}
+
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-sep {
+  display: none !important;
+}
+
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-code {
+  grid-column: 1;
+  text-align: center;
+  font-family: 'SF Mono', Menlo, monospace;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: rgba(199, 210, 254, 0.95);
+}
+
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-title {
+  grid-column: 2;
+  margin: 0 !important;
+  padding: 0 !important;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: rgba(229, 231, 235, 0.92);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Unreported list timeline cells (cols 3, 4, 5). */
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-time {
+  grid-column: 3;
+  text-align: center;
+  font-family: 'SF Mono', Menlo, monospace;
+  font-size: 11.5px;
+  color: rgba(203, 213, 225, 0.88);
+  white-space: nowrap;
+}
+
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-end {
+  grid-column: 4;
+  text-align: center;
+  font-family: 'SF Mono', Menlo, monospace;
+  font-size: 11.5px;
+  color: rgba(203, 213, 225, 0.88);
+  white-space: nowrap;
+}
+
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-dur-compact {
+  grid-column: 5;
+  text-align: center;
+  font-family: 'SF Mono', Menlo, monospace;
+  font-size: 11.5px;
+  color: rgba(203, 213, 225, 0.88);
+  white-space: nowrap;
+}
+
+/* ---- Reported / Solved extra columns (Reported timestamp + Solved) ---- */
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-reported-at,
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-solved-at {
+  text-align: center;
+  font-family: 'SF Mono', Menlo, monospace;
+  font-size: 11.5px;
+  color: rgba(203, 213, 225, 0.88);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- Reported / Solved owner / tag / ticket — base styling (positions set
+   per-section below so Unreported and Reported/Solved don't collide) ---- */
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-ticket-owner {
+  text-align: center;
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-top-right {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: wrap !important;
+  justify-content: center !important;
+  align-items: center !important;
+  gap: 3px 4px !important;
+  margin: 0 !important;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0 4px;
+  box-sizing: border-box;
+}
+
+/* Compact chip styling inside the incident grid: tighter than the default
+   card chips so single tags stay short and a stacked pair (e.g.
+   "FULL REPLACEMENT" + "NON INTERNET") doesn't double the row height. */
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-top-right > * {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  max-width: 100%;
+  margin: 0 !important;
+  padding: 1px 7px !important;
+  font-size: 9px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.03em !important;
+  line-height: 1.2 !important;
+  text-transform: uppercase;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  border-radius: 999px !important;
+  text-align: center !important;
+}
+
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-ticket-link {
+  text-align: center;
+  font-size: 11.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Type column: Internet vs Non Internet. Pill-style, color-coded so it's
+   immediately scannable. Internet uses a cool slate/blue, Non Internet
+   uses a warm amber so the manual reports stand out. */
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-issue-kind {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: center;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  text-align: center;
+  white-space: nowrap;
+  line-height: 1.25;
+  max-width: 100%;
+  border: 1px solid transparent;
+}
+
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-issue-kind[data-kind="internet"] {
+  color: rgba(186, 230, 253, 0.95);
+  border-color: rgba(56, 189, 248, 0.32);
+  background: rgba(14, 116, 144, 0.18);
+}
+
+#panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-issue-kind[data-kind="non-internet"] {
+  color: rgba(253, 224, 145, 0.98);
+  border-color: rgba(245, 158, 11, 0.42);
+  background: rgba(180, 83, 9, 0.22);
+}
+
+/* ---- Per-section grid templates + column positions ----
+   Unreported keeps 5 cols. Reported adds Reported timestamp = 9 cols.
+   Solved also adds Solved timestamp = 10 cols. We override
+   `--incident-cols` on the section so both the header row and every card
+   row pick up the new template via the existing
+   `grid-template-columns: var(--incident-cols)` rules.
+   ---------------------------------------------------------------- */
+
+/* Unreported: 5 cols (already the default `--incident-cols`). */
+#panelRoot .grouped-device-section[data-incident-section="unreported"] {
+  --incident-cols: 90px minmax(0, 1fr) 130px 130px 130px;
+}
+
+/* Reported: 10 cols. */
+#panelRoot .grouped-device-section[data-incident-section="reported"] {
+  --incident-cols:
+    80px           /* Store */
+    minmax(0, 1fr) /* Device */
+    110px          /* Start */
+    110px          /* End */
+    78px           /* Duration */
+    110px          /* Reported */
+    100px          /* Owner */
+    110px          /* Type */
+    140px          /* Tag */
+    90px;          /* Ticket */
+}
+
+#panelRoot [data-incident-section="reported"] .unreported-live-card .unreported-live-reported-at { grid-column: 6; }
+#panelRoot [data-incident-section="reported"] .unreported-live-card .unreported-live-ticket-owner { grid-column: 7; }
+#panelRoot [data-incident-section="reported"] .unreported-live-card .unreported-live-issue-kind  { grid-column: 8; }
+#panelRoot [data-incident-section="reported"] .unreported-live-card .unreported-live-top-right   { grid-column: 9; }
+#panelRoot [data-incident-section="reported"] .unreported-live-card .unreported-live-ticket-link { grid-column: 10; }
+
+/* Solved: 11 cols. */
+#panelRoot .grouped-device-section[data-incident-section="solved"] {
+  --incident-cols:
+    80px           /* Store */
+    minmax(0, 1fr) /* Device */
+    110px          /* Start */
+    110px          /* End */
+    78px           /* Duration */
+    110px          /* Reported */
+    110px          /* Solved */
+    100px          /* Owner */
+    110px          /* Type */
+    140px          /* Tag */
+    90px;          /* Ticket */
+}
+
+#panelRoot [data-incident-section="solved"] .unreported-live-card .unreported-live-reported-at { grid-column: 6; }
+#panelRoot [data-incident-section="solved"] .unreported-live-card .unreported-live-solved-at   { grid-column: 7; }
+#panelRoot [data-incident-section="solved"] .unreported-live-card .unreported-live-ticket-owner { grid-column: 8; }
+#panelRoot [data-incident-section="solved"] .unreported-live-card .unreported-live-issue-kind  { grid-column: 9; }
+#panelRoot [data-incident-section="solved"] .unreported-live-card .unreported-live-top-right   { grid-column: 10; }
+#panelRoot [data-incident-section="solved"] .unreported-live-card .unreported-live-ticket-link { grid-column: 11; }
+
+/* Empty-state spans all columns. */
+#panelRoot .grouped-device-grid--incident .empty-state {
+  padding: 14px 12px !important;
+  text-align: center;
+  color: rgba(148, 163, 184, 0.7);
+  font-size: 12px;
+  grid-column: 1 / -1 !important;
+}
+
+/* Section title spacing. */
+#panelRoot .grouped-device-section[data-incident-section] {
+  margin: 0;
+}
+
+#panelRoot .grouped-device-section[data-incident-section] .grouped-device-title {
+  margin-bottom: 4px;
+}
+
+/* Narrower viewports: tighten the column widths. */
+@media (max-width: 960px) {
+  :root {
+    --incident-cols: 72px minmax(0, 1fr) 100px 100px 100px;
+    --incident-row-pad-x: 8px;
+  }
+  #panelRoot .grouped-device-grid--incident .incident-list-header {
+    font-size: 9.5px;
+    letter-spacing: 0.4px;
+  }
+}
+
+/* ---- Expand / Collapse per incident section --------------------------- */
+
+#panelRoot .grouped-device-section[data-incident-section] > .grouped-device-title {
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: background-color 120ms ease;
+}
+
+#panelRoot .grouped-device-section[data-incident-section] > .grouped-device-title:hover,
+#panelRoot .grouped-device-section[data-incident-section] > .grouped-device-title:focus-visible {
+  background: rgba(99, 102, 241, 0.08);
+  outline: none;
+}
+
+#panelRoot .grouped-device-section[data-incident-section] > .grouped-device-title:focus-visible {
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.4);
+}
+
+#panelRoot .grouped-device-chevron {
+  font-size: 10px;
+  width: 12px;
+  text-align: center;
+  opacity: 0.7;
+  transition: transform 150ms ease, opacity 150ms ease;
+}
+
+#panelRoot .grouped-device-section[data-incident-section] > .grouped-device-title:hover .grouped-device-chevron {
+  opacity: 1;
+}
+
+/* Collapsed: rotate chevron and hide the body. */
+#panelRoot .grouped-device-section.is-collapsed > .grouped-device-title .grouped-device-chevron {
+  transform: rotate(-90deg);
+}
+
+#panelRoot .grouped-device-section.is-collapsed > .grouped-device-grid--incident {
+  display: none !important;
+}
+
+/* Compact mode on narrow screens: hide the device label fully, keep store + timeline. */
+@media (max-width: 720px) {
+  #panelRoot .grouped-device-grid--incident .unreported-live-card .unreported-live-inner {
+    gap: 8px !important;
+  }
+  #panelRoot .grouped-device-grid--incident .unreported-live-head {
+    flex: 0 0 64px !important;
+  }
+}
+
+/* Reporting view scroll */
+#panelRoot #incident-reporting-view.visible {
+  display: block !important;
+}
+
+/* Tablet: icon rail */
+@media (max-width: 1279px) {
+  :root {
+    --shell-sidebar-w: 220px;
+  }
+
+  #panelRoot .stores-grid {
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)) !important;
+  }
+}
+
+@media (max-width: 1023px) {
+  .app-sidebar {
+    flex: 0 0 var(--shell-sidebar-rail);
+    width: var(--shell-sidebar-rail);
+  }
+
+  /* Hide text bits — same logic as the manual collapse state. */
+  .app-sidebar__brand-text,
+  .app-sidebar__title,
+  .app-sidebar__subtitle,
+  .app-sidebar__group-label,
+  .app-sidebar__item span,
+  .app-sidebar__collapse-label {
+    display: none;
+  }
+
+  .app-sidebar__divider {
+    margin-left: 6px;
+    margin-right: 16px;
+  }
+
+  .app-sidebar__brand {
+    padding: 0 10px;
+  }
+
+}
+
+/* Mobile: drawer sidebar */
+@media (max-width: 767px) {
+  .app-sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    flex: none;
+    width: min(280px, 85vw);
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    box-shadow: var(--shell-shadow);
+  }
+
+  .app-shell.is-sidebar-open .app-sidebar {
+    transform: translateX(0);
+  }
+
+  .app-sidebar__title,
+  .app-sidebar__subtitle,
+  .app-sidebar__group-label,
+  .app-sidebar__item span {
+    display: block;
+  }
+
+  .app-sidebar__brand {
+    justify-content: flex-start;
+    padding: 18px 16px;
+  }
+
+  .app-sidebar__item {
+    justify-content: flex-start;
+    padding: 10px 12px;
+  }
+
+  .app-topbar__menu {
+    display: inline-flex;
+  }
+
+  #panelRoot {
+    padding: 12px 12px 24px;
+  }
+
+  #panelRoot .stores-grid {
+    grid-template-columns: repeat(3, 1fr) !important;
+  }
+
+  #time-range-modal.time-range-modal.show .time-range-content {
+    position: fixed !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    top: auto !important;
+    transform: none !important;
+    max-width: none !important;
+    width: 100% !important;
+    border-radius: 16px 16px 0 0 !important;
+    max-height: 85vh;
+    overflow-y: auto;
+  }
+
+  #time-range-modal .time-range-sections {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+@media (max-width: 479px) {
+  #panelRoot .stores-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+
+  .app-topbar__actions .time-range-button span {
+    max-width: 100px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}

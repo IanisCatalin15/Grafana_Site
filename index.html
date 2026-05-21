@@ -1,0 +1,955 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="color-scheme" content="dark light" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+  <title>Aurora Incidents</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" referrerpolicy="no-referrer" crossorigin="anonymous" />
+  <link rel="stylesheet" href="/style.css?v=2" />
+  <link rel="stylesheet" href="/css/shell.css?v=38" />
+  <link rel="stylesheet" href="/css/router-timeline.css?v=4" />
+</head>
+<body>
+<div class="app-shell" id="app-shell">
+  <aside class="app-sidebar" id="app-sidebar" aria-label="Main navigation"></aside>
+  <div class="app-sidebar-backdrop" id="app-sidebar-backdrop" hidden></div>
+  <div class="app-main">
+    <header class="app-topbar" id="app-topbar"></header>
+    <div class="app-scroll">
+<main class="stores-container panel" id="panelRoot">
+    <section class="page-nav-header" aria-label="Page selector">
+        <div class="page-nav-control">
+            <div class="page-switch" role="tablist" aria-label="Dashboard Page">
+                <button id="page-switch-live" class="page-switch-btn" type="button" data-page="live" role="tab" aria-selected="false">
+                    Live Operations
+                </button>
+                <button id="page-switch-reporting" class="page-switch-btn" type="button" data-page="reporting" role="tab" aria-selected="false">
+                    Incident & Reporting
+                </button>
+            </div>
+        </div>
+    </section>
+    <div id="night-freeze-badge" class="night-freeze-badge" style="display:none;" aria-live="polite">
+        Night freeze active (21:00 - 07:00)
+    </div>
+
+    <div class="shell-overview-band" id="shell-overview-band">
+    <section class="shell-stat-row" id="shell-stat-row" aria-label="Connectivity summary">
+        <article class="shell-stat-card shell-stat-card--internet">
+            <h3>Internet Status</h3>
+            <div class="shell-stat-card__rows">
+                <div class="shell-stat-row-item">
+                    <span class="shell-stat-row-item__label">Primary</span>
+                    <span class="shell-stat-row-item__value" id="int-primary-offline">0</span>
+                    <span class="shell-stat-row-item__suffix">Offline</span>
+                </div>
+                <div class="shell-stat-row-item">
+                    <span class="shell-stat-row-item__label">Backup</span>
+                    <span class="shell-stat-row-item__value" id="int-backup-offline">0</span>
+                    <span class="shell-stat-row-item__suffix">Offline</span>
+                </div>
+                <div class="shell-stat-row-item">
+                    <span class="shell-stat-row-item__label">Switch</span>
+                    <span class="shell-stat-row-item__value" id="int-switch-offline">0</span>
+                    <span class="shell-stat-row-item__suffix">Offline</span>
+                </div>
+            </div>
+        </article>
+        <article class="shell-stat-card shell-stat-card--devices">
+            <h3>Offline Devices</h3>
+            <div class="shell-stat-card__rows">
+                <div class="shell-stat-row-item">
+                    <span class="shell-stat-row-item__label">Cash Registers</span>
+                    <span class="shell-stat-row-item__value" id="int-cash-offline">0</span>
+                    <span class="shell-stat-row-item__suffix">Offline</span>
+                </div>
+                <div class="shell-stat-row-item">
+                    <span class="shell-stat-row-item__label">Music</span>
+                    <span class="shell-stat-row-item__value" id="int-music-offline">0</span>
+                    <span class="shell-stat-row-item__suffix">Offline</span>
+                </div>
+                <div class="shell-stat-row-item">
+                    <span class="shell-stat-row-item__label">Price Checkers</span>
+                    <span class="shell-stat-row-item__value" id="int-price-offline">0</span>
+                    <span class="shell-stat-row-item__suffix">Offline</span>
+                </div>
+            </div>
+        </article>
+    </section>
+
+    <section class="stats-header shell-stat-row-overview" aria-label="Summary cards">
+        <article class="stat-box stat-box-breakdown">
+            <div class="stat-number" id="total-stores">--</div>
+            <div class="stat-text" id="total-stores-label">Total Devices</div>
+        </article>
+        <article class="stat-box stat-box-overview-metrics" id="overview-store-totals-box" style="display:none;">
+            <div id="overview-store-totals"></div>
+        </article>
+    </section>
+    </div>
+
+    <section class="controls-header" aria-label="Controls">
+        <div class="search-container">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                width="14" height="14" class="search-icon" aria-hidden="true">
+                <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+            <input type="text" id="search-box" class="search-box" placeholder="Filter stores..." aria-label="Filter stores in report">
+            <button id="clear-search" class="clear-search" aria-label="Clear search" style="display: none;">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true">
+                    <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+            </button>
+        </div>
+
+        <select id="device-type-selector" class="device-selector" aria-label="Device type filter">
+            <option value="routers">Overview</option>
+            <option value="unreported">Incidents</option>
+            <option value="switches">Switches</option>
+            <option value="admin-pc">Admin's PC</option>
+            <option value="cash-registers">Cash Registers</option>
+            <option value="music">Music</option>
+            <option value="price-checkers">Price Checkers</option>
+        </select>
+
+        <button id="sort-toggle-button" class="sort-button" aria-label="Toggle sort order"></button>
+
+        <button id="non-internet-issue-btn" class="non-internet-issue-btn controls-header-action-btn" type="button" style="display:none;">
+            Add Non Internet Issues
+        </button>
+
+        <div id="live-unreported-toolbar" class="live-unreported-toolbar" hidden>
+            <div class="live-unreported-device-block">
+                <span id="live-unreported-device-filter-empty" class="live-unreported-no-devices" role="status" hidden>No categories in range</span>
+                <span class="unreported-h-group live-unreported-device-hgroup controls-header-action-btn controls-header-action-btn--device">
+                    <details class="analytics-filter-device-details" id="live-unreported-device-filter-details">
+                        <summary class="analytics-filter-summary-mini live-unreported-device-filter-summary" id="live-unreported-device-filter-summary" title="Device filter">
+                            <span class="unreported-h-text">Devices</span>
+                        </summary>
+                        <div id="live-unreported-device-checklist-wrap" class="analytics-filter-checklist" role="group" aria-label="Filter by device category">
+                            <label class="unreported-cb-label"><input type="checkbox" id="live-unreported-dev-all" class="live-unreported-dev-cb" data-group="all" checked /> All</label>
+                            <label class="unreported-cb-label"><input type="checkbox" class="live-unreported-dev-cb" data-group="primary" /> Primary</label>
+                            <label class="unreported-cb-label"><input type="checkbox" class="live-unreported-dev-cb" data-group="backup" /> Backup</label>
+                            <label class="unreported-cb-label"><input type="checkbox" class="live-unreported-dev-cb" data-group="switches" /> Switches</label>
+                            <label class="unreported-cb-label"><input type="checkbox" class="live-unreported-dev-cb" data-group="cash" /> Cash registers</label>
+                            <label class="unreported-cb-label"><input type="checkbox" class="live-unreported-dev-cb" data-group="music" /> Music</label>
+                            <label class="unreported-cb-label"><input type="checkbox" class="live-unreported-dev-cb" data-group="price" /> Price checkers</label>
+                        </div>
+                    </details>
+                </span>
+            </div>
+            <button type="button" id="live-unreported-duration-cycle" class="live-unreported-status-cycle live-unreported-duration-cycle controls-header-action-btn" aria-label="Sort by incident duration. Click to change.">
+                <span class="live-unreported-status-cycle-stack" aria-hidden="true">
+                    <span class="live-unreported-status-cycle-prefix">Duration</span>
+                    <span id="live-unreported-duration-cycle-value" class="live-unreported-status-cycle-value">Default</span>
+                </span>
+            </button>
+            <button type="button" id="live-unreported-status-cycle" class="live-unreported-status-cycle controls-header-action-btn" aria-label="Filter by incident status. Click to change.">
+                <span class="live-unreported-status-cycle-stack" aria-hidden="true">
+                    <span class="live-unreported-status-cycle-prefix">Status</span>
+                    <span id="live-unreported-status-cycle-value" class="live-unreported-status-cycle-value">All</span>
+                </span>
+            </button>
+            <div class="live-unreported-device-block">
+                <span class="unreported-h-group live-unreported-tag-hgroup controls-header-action-btn controls-header-action-btn--device">
+                    <details class="analytics-filter-device-details" id="live-unreported-tag-filter-details">
+                        <summary class="analytics-filter-summary-mini live-unreported-tag-filter-summary" id="live-unreported-tag-filter-summary" title="Tags filter">
+                            <span class="unreported-h-text">Tags</span>
+                        </summary>
+                        <div id="live-unreported-tag-checklist-wrap" class="analytics-filter-checklist" role="group" aria-label="Filter by report tag">
+                            <div class="live-tag-filter-none-msg tag-filter-none-msg" hidden role="status">None</div>
+                            <label class="unreported-cb-label"><input type="checkbox" id="live-unreported-tag-all" class="live-unreported-tag-cb" data-tag="all" checked /> All</label>
+                            <label class="unreported-cb-label"><input type="checkbox" class="live-unreported-tag-cb" data-tag="power-outage" /> Power Outage</label>
+                            <label class="unreported-cb-label"><input type="checkbox" class="live-unreported-tag-cb" data-tag="network-issue" /> Network Issue</label>
+                            <label class="unreported-cb-label"><input type="checkbox" class="live-unreported-tag-cb" data-tag="planned" /> Planned</label>
+                            <label class="unreported-cb-label"><input type="checkbox" class="live-unreported-tag-cb" data-tag="troubleshooting" /> Troubleshooting</label>
+                            <label class="unreported-cb-label"><input type="checkbox" class="live-unreported-tag-cb" data-tag="partial-replacement" /> Partial Replacement</label>
+                            <label class="unreported-cb-label"><input type="checkbox" class="live-unreported-tag-cb" data-tag="full-replacement" /> Full Replacement</label>
+                        </div>
+                    </details>
+                </span>
+            </div>
+            <label class="live-unreported-toolbar-ticket-search live-unreported-ticket-search-control controls-header-action-btn" role="search">
+                <span class="live-unreported-status-cycle-stack">
+                    <span class="live-unreported-status-cycle-prefix live-unreported-ticket-search-prefix" id="live-crm-ticket-search-label">Ticket:</span>
+                    <input type="text" id="live-crm-ticket-search-input" class="live-crm-ticket-search-input"
+                        inputmode="numeric" pattern="[0-9]*" enterkeyhint="search" autocomplete="off"
+                        aria-labelledby="live-crm-ticket-search-label"
+                        title="Only digits; you can paste a full CRM task URL to extract the id" />
+                </span>
+            </label>
+        </div>
+
+        <button id="offline-time-button" class="offline-time-button" aria-expanded="false">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true">
+                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+            </svg>
+            <span>Offline Time Report</span>
+        </button>
+
+        <button id="offline-sort-button" class="offline-sort-button" aria-label="Sort by highest time">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true">
+                <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+            </svg>
+            <span>Highest Time</span>
+        </button>
+
+        <button id="export-button" class="export-button" title="Export to CSV" aria-label="Export data to CSV">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            <span>Export</span>
+        </button>
+
+        <button id="time-range-button" class="time-range-button" title="Click to change time range" aria-haspopup="dialog">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true">
+                <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+            </svg>
+            <span>Today</span>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="11" height="11"
+                class="chevron-icon" aria-hidden="true">
+                <polyline points="6 9 12 15 18 9"/>
+            </svg>
+        </button>
+    </section>
+
+    <div id="time-range-modal" class="time-range-modal" role="dialog" aria-labelledby="time-range-title" aria-hidden="true">
+        <div class="time-range-content">
+            <h3 id="time-range-title">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+                </svg>
+                Select Time Range
+            </h3>
+            <div class="time-range-sections">
+                <div class="time-section">
+                    <h4>QUICK RANGES</h4>
+                    <button class="time-option" data-range="now-3h">Last 3 hours</button>
+                    <button class="time-option" data-range="now-6h">Last 6 hours</button>
+                    <button class="time-option" data-range="now-12h">Last 12 hours</button>
+                    <button class="time-option" data-range="now-24h">Last 24 hours</button>
+                    <button class="time-option" data-range="now-2d">Last 2 days</button>
+                    <button class="time-option" data-range="now-7d">Last 7 days</button>
+                    <div class="time-range-help">
+                        <div class="help-line"><strong>Quick ranges</strong> = <strong>LIVE</strong> (selected range → <strong>now</strong>)</div>
+                        <div class="help-line"><strong>Specific dates</strong> = <strong>HISTORICAL</strong> (fixed <strong>FROM</strong> → <strong>TO</strong>)</div>
+                    </div>
+                </div>
+                <div class="time-section">
+                    <h4>SPECIFIC DATES</h4>
+                    <button class="time-option" data-range="today">Today</button>
+                    <button class="time-option" data-range="yesterday">Yesterday</button>
+                    <button class="time-option" data-range="2days">2 days ago</button>
+                    <button class="time-option date-picker-trigger">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13" aria-hidden="true">
+                            <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+                            <line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+                        </svg>
+                        Select a date and time
+                    </button>
+                    <div id="current-selection-preview" class="current-selection-preview">
+                        <div class="current-selection-preview-header">
+                            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true">
+                                <circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>
+                            </svg>
+                            <span>Currently Viewing</span>
+                        </div>
+                        <div class="current-selection-preview-content" id="preview-content"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="date-picker-modal" class="date-picker-modal" role="dialog" aria-labelledby="month-year" aria-hidden="true">
+        <div class="date-picker-content">
+            <div class="date-picker-header">
+                <button class="date-nav" id="prev-month" title="Previous month" aria-label="Previous month">‹</button>
+                <span class="date-picker-title" id="month-year"></span>
+                <button class="date-nav" id="next-month" title="Next month" aria-label="Next month">›</button>
+            </div>
+            <div class="date-picker-weekdays" role="row">
+                <div role="columnheader">S</div>
+                <div role="columnheader">M</div>
+                <div role="columnheader">T</div>
+                <div role="columnheader">W</div>
+                <div role="columnheader">T</div>
+                <div role="columnheader">F</div>
+                <div role="columnheader">S</div>
+            </div>
+            <div class="date-picker-days" id="calendar-days" role="grid"></div>
+            <div class="time-range-picker-inline">
+                <div class="time-range-row">
+                    <label class="time-range-label" for="from-hour">FROM</label>
+                    <input type="number" id="from-hour" class="time-input-small" min="0" max="23" value="07" aria-label="From hour">
+                    <span class="time-separator-small" aria-hidden="true">:</span>
+                    <input type="number" id="from-minute" class="time-input-small" min="0" max="59" value="00" aria-label="From minute">
+                </div>
+                <div class="time-range-row">
+                    <label class="time-range-label" for="to-hour">TO</label>
+                    <input type="number" id="to-hour" class="time-input-small" min="0" max="23" value="21" aria-label="To hour">
+                    <span class="time-separator-small" aria-hidden="true">:</span>
+                    <input type="number" id="to-minute" class="time-input-small" min="0" max="59" value="00" aria-label="To minute">
+                </div>
+            </div>
+            <div id="current-selection-preview-datepicker" class="current-selection-preview">
+                <div class="current-selection-preview-header">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true">
+                        <circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>
+                    </svg>
+                    <span>Selection Preview</span>
+                </div>
+                <div class="current-selection-preview-content" id="preview-content-datepicker"></div>
+            </div>
+            <div class="date-picker-footer">
+                <button class="date-picker-cancel" id="cancel-date">Cancel</button>
+                <button class="date-picker-set" id="set-date">Set</button>
+            </div>
+        </div>
+    </div>
+
+    <section id="offline-time-table-container" class="offline-time-table-container" aria-label="Offline time report">
+        <h3>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true">
+                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+            </svg>
+            Offline Time Report
+            <span class="time-range-display" id="time-range-display"></span>
+        </h3>
+        <div class="table-scroll-wrapper">
+            <table class="offline-time-table" role="grid">
+                <thead>
+                    <tr>
+                        <th class="sortable" data-sort-key="store" scope="col">Store</th>
+                        <th class="sortable" data-sort-key="bothDown" scope="col">No Connectivity</th>
+                        <th class="sortable" data-sort-key="backup" scope="col">Backup Connection</th>
+                        <th class="sortable" data-sort-key="cr1" scope="col">K1</th>
+                        <th class="sortable" data-sort-key="cr2" scope="col">K2</th>
+                        <th class="sortable" data-sort-key="cr3" scope="col">K3</th>
+                        <th class="sortable" data-sort-key="nuc" scope="col">Admin PC</th>
+                        <th class="sortable" data-sort-key="m1" scope="col">M1</th>
+                        <th class="sortable" data-sort-key="m2" scope="col">M2</th>
+                        <th class="sortable" data-sort-key="pc" scope="col">Price Checkers</th>
+                        <th class="sortable" data-sort-key="primaryUptimePct" scope="col">Primary %</th>
+                        <th class="sortable" data-sort-key="backupUptimePct" scope="col">Backup %</th>
+                        <th class="sortable" data-sort-key="internetUptimePct" scope="col">Internet %</th>
+                    </tr>
+                </thead>
+                <tbody id="offline-time-table-body"></tbody>
+            </table>
+        </div>
+    </section>
+
+    <div id="unreported-live-meta" class="unreported-live-meta" hidden></div>
+    <section class="stores-grid" id="stores-grid" role="list" aria-label="Device status grid"></section>
+
+    <section id="router-timeline-view" class="analytics-view router-timeline-view" aria-label="Router timeline view">
+        <div class="timeline-panel">
+            <header class="timeline-header">
+                <div class="timeline-title">
+                    <div>
+                        <div class="title-text">Router Status Timeline</div>
+                        <div class="title-sub" id="timeline-range">Loading time range...</div>
+                    </div>
+                </div>
+                <div class="timeline-header-actions">
+                    <div class="timeline-stats timeline-stats-inline">
+                        <div class="timeline-stat">
+                            <button type="button" id="timeline-reports-btn" class="timeline-stat-label">Reports / Down</button>
+                        </div>
+                    </div>
+                    <button type="button" class="btn ghost compact" id="menu-export-csv">Export CSV</button>
+                    <button type="button" class="btn primary compact" id="menu-export-reports-csv">Export Reports CSV</button>
+                </div>
+            </header>
+
+            <div id="timeline-wrapper" class="timeline-wrapper" aria-live="polite">
+                <div class="timeline-loading">Loading timeline...</div>
+            </div>
+
+            <div class="timeline-legend" aria-hidden="true">
+                <span class="timeline-legend-item"><i class="legend-dot legend-down"></i>Down</span>
+                <span class="timeline-legend-item"><i class="legend-dot legend-backup"></i>Backup</span>
+                <span class="timeline-legend-item"><i class="legend-dot legend-up"></i>Auto Solved / Resolved</span>
+            </div>
+
+            <div class="timeline-tooltip" id="timeline-tooltip" role="tooltip" aria-hidden="true"></div>
+
+            <div class="report-modal" id="report-modal" role="dialog" aria-modal="true" aria-hidden="true">
+                <div class="report-modal-card">
+                    <div class="report-modal-header">
+                        <div class="report-modal-title" id="report-modal-title">New Report</div>
+                        <button type="button" class="modal-close" id="report-modal-close" aria-label="Close">
+                            <span aria-hidden="true">&times;</span>
+                        </button>
+                    </div>
+                    <form id="report-form" class="report-form">
+                        <input type="hidden" id="report-timestamp" />
+                        <div class="form-row">
+                            <label for="report-store">Store</label>
+                            <input type="text" id="report-store" placeholder="e.g., 44" required readonly aria-readonly="true" tabindex="-1" />
+                        </div>
+                        <div class="form-row">
+                            <label for="report-device">Category</label>
+                            <select id="report-device">
+                                <option value="Network">Network</option>
+                                <option value="Power Outage">Power Outage</option>
+                                <option value="Other">Other</option>
+                            </select>
+                        </div>
+                        <div class="form-row" id="report-cash-registers-row" style="display:none;">
+                            <label for="report-cash-registers">Cash Registers Affected</label>
+                            <select id="report-cash-registers">
+                                <option value="1">1</option>
+                                <option value="2">2</option>
+                                <option value="3">3</option>
+                            </select>
+                        </div>
+                        <div class="form-row full">
+                            <label for="report-desc">Description</label>
+                            <textarea id="report-desc" rows="3" placeholder="Describe the issue and impact..." minlength="5" required></textarea>
+                        </div>
+                        <div class="form-row full" id="report-update-note-row" style="display:none;">
+                            <div class="update-note-heading">
+                                <label for="report-update-note" class="form-label">Update Note</label>
+                            </div>
+                            <textarea id="report-update-note" rows="6" placeholder="Write your update here..." class="update-note-textarea"></textarea>
+                        </div>
+                        <div class="form-row form-row-inline full">
+                            <label class="checkbox">
+                                <input type="checkbox" id="report-resolved" />
+                                <span>Solved</span>
+                            </label>
+                            <div class="timestamp-chip" id="report-time-display">--</div>
+                        </div>
+                        <div class="form-actions full">
+                            <button type="button" class="btn ghost" id="report-cancel">Cancel</button>
+                            <button type="submit" class="btn primary" id="report-submit">Save Report</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+
+            <div class="report-modal" id="report-view-modal" role="dialog" aria-modal="true" aria-hidden="true">
+                <div class="report-modal-card">
+                    <div class="report-modal-header">
+                        <div class="report-modal-title" id="report-view-title">Report Details</div>
+                        <button type="button" class="modal-close" id="report-view-close" aria-label="Close">
+                            <span aria-hidden="true">&times;</span>
+                        </button>
+                    </div>
+                    <div class="report-view" id="report-view"></div>
+                    <div class="report-list" id="report-list" aria-live="polite"></div>
+                </div>
+            </div>
+
+            <div class="report-modal" id="top-users-modal" role="dialog" aria-modal="true" aria-hidden="true">
+                <div class="report-modal-card">
+                    <div class="report-modal-header">
+                        <div class="report-modal-title" id="top-users-title">Top Reporters</div>
+                        <button type="button" class="modal-close" id="top-users-close" aria-label="Close">
+                            <span aria-hidden="true">&times;</span>
+                        </button>
+                    </div>
+                    <div class="top-users-content" id="top-users-content"></div>
+                    <div class="form-actions top-users-actions">
+                        <button type="button" class="btn ghost" id="top-users-cancel">Close</button>
+                        <button type="button" class="btn primary" id="top-users-export">Export Top Reporters CSV</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="incident-reports-panel" id="incident-reports-panel" aria-live="polite">
+                <div class="report-modal-header">
+                    <div class="report-modal-title">Incident Reports</div>
+                </div>
+                <div class="incident-toolbar">
+                    <input type="text" id="incident-search" class="incident-search" placeholder="Search by store, category, user, description..." />
+                    <div class="incident-summary" id="incident-summary">0 reports</div>
+                </div>
+                <div class="incident-reports-list" id="incident-reports-list" aria-live="polite"></div>
+            </div>
+
+            <div class="report-modal" id="edit-update-modal" role="dialog" aria-modal="true" aria-hidden="true">
+                <div class="report-modal-card edit-update-card">
+                    <div class="report-modal-header">
+                        <div class="report-modal-title">Edit Update</div>
+                        <button type="button" class="modal-close" id="edit-update-close" aria-label="Close">
+                            <span aria-hidden="true">&times;</span>
+                        </button>
+                    </div>
+                    <div class="form-row full">
+                        <label for="edit-update-text">Update text</label>
+                        <textarea id="edit-update-text" rows="5" placeholder="Write your update here..."></textarea>
+                    </div>
+                    <div class="form-actions full edit-update-actions">
+                        <button type="button" class="btn ghost" id="edit-update-cancel">Close</button>
+                        <button type="button" class="btn primary" id="edit-update-done">Done</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="report-modal" id="confirm-modal" role="dialog" aria-modal="true" aria-hidden="true">
+                <div class="report-modal-card confirm-card">
+                    <div class="confirm-icon">&#x1F5D1;</div>
+                    <div class="confirm-title" id="confirm-modal-title">Are you sure?</div>
+                    <div class="confirm-message" id="confirm-modal-message">This action cannot be undone.</div>
+                    <div class="form-actions confirm-actions">
+                        <button type="button" class="btn ghost" id="confirm-cancel">Cancel</button>
+                        <button type="button" class="btn ghost danger" id="confirm-ok">Delete</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="timeline-toasts" id="timeline-toasts" aria-live="polite"></div>
+        </div>
+    </section>
+
+    <section id="incident-reporting-view" class="analytics-view" aria-label="Incident and reporting view">
+        <div class="reporting-view-header">
+            <button id="reporting-time-range-button" class="time-range-button reporting-time-range-button" title="Click to change time range" aria-haspopup="dialog">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+                </svg>
+                <span>Live - Last 6 hours</span>
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                    stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="11" height="11"
+                    class="chevron-icon" aria-hidden="true">
+                    <polyline points="6 9 12 15 18 9"/>
+                </svg>
+            </button>
+        </div>
+        <div class="analytics-kpi-grid" id="reporting-kpi-grid"></div>
+        <div class="analytics-table-card">
+            <h3>Top Stores By Downtime</h3>
+            <div class="analytics-table-wrap">
+                <table class="analytics-table analytics-table-cols-6 analytics-reporting-filter-table top-stores-report-table" aria-label="Top stores by downtime">
+                    <thead>
+                        <tr id="reporting-top-stores-filters" class="reporting-filter-head-row">
+                            <th scope="col" class="unreported-th-merged">
+                                <span class="unreported-h-group">
+                                    <input type="hidden" id="ts-filter-store-order" value="" />
+                                    <button type="button" class="analytics-th-sort-btn" data-sort-input="ts-filter-store-order" aria-label="Sort by store number">
+                                        <span class="analytics-th-sort-name">Store</span><span class="analytics-th-sort-sep" aria-hidden="true"> </span><span class="analytics-th-sort-symbol">-</span>
+                                    </button>
+                                </span>
+                            </th>
+                            <th scope="col" class="unreported-th-merged">
+                                <span class="unreported-h-group">
+                                    <input type="hidden" id="ts-filter-incidents-order" value="" />
+                                    <button type="button" class="analytics-th-sort-btn" data-sort-input="ts-filter-incidents-order" aria-label="Sort incidents">
+                                        <span class="analytics-th-sort-name">Incidents</span><span class="analytics-th-sort-sep" aria-hidden="true"> </span><span class="analytics-th-sort-symbol">-</span>
+                                    </button>
+                                </span>
+                            </th>
+                            <th scope="col" class="unreported-th-merged">
+                                <span class="unreported-h-group">
+                                    <input type="hidden" id="ts-filter-downtime-order" value="" />
+                                    <button type="button" class="analytics-th-sort-btn" data-sort-input="ts-filter-downtime-order" aria-label="Sort downtime minutes">
+                                        <span class="analytics-th-sort-name">Downtime Minutes</span><span class="analytics-th-sort-sep" aria-hidden="true"> </span><span class="analytics-th-sort-symbol">-</span>
+                                    </button>
+                                </span>
+                            </th>
+                            <th scope="col" class="unreported-th-merged">
+                                <span class="unreported-h-group">
+                                    <input type="hidden" id="ts-filter-mttr-order" value="" />
+                                    <button type="button" class="analytics-th-sort-btn" data-sort-input="ts-filter-mttr-order" aria-label="Sort resolve time">
+                                        <span class="analytics-th-sort-name">Resolve Time</span><span class="analytics-th-sort-sep" aria-hidden="true"> </span><span class="analytics-th-sort-symbol">-</span>
+                                    </button>
+                                </span>
+                            </th>
+                            <th scope="col" class="unreported-th-merged">
+                                <span class="unreported-h-group">
+                                    <input type="hidden" id="ts-filter-ttr-avg-order" value="" />
+                                    <button type="button" class="analytics-th-sort-btn" data-sort-input="ts-filter-ttr-avg-order" aria-label="Sort time to report average">
+                                        <span class="analytics-th-sort-name">Time To Report Avg</span><span class="analytics-th-sort-sep" aria-hidden="true"> </span><span class="analytics-th-sort-symbol">-</span>
+                                    </button>
+                                </span>
+                            </th>
+                            <th scope="col" class="unreported-th-merged">
+                                <span class="unreported-h-group">
+                                    <input type="hidden" id="ts-filter-rtr-avg-order" value="" />
+                                    <button type="button" class="analytics-th-sort-btn" data-sort-input="ts-filter-rtr-avg-order" aria-label="Sort report to resolve average">
+                                        <span class="analytics-th-sort-name">Report To Resolve Avg</span><span class="analytics-th-sort-sep" aria-hidden="true"> </span><span class="analytics-th-sort-symbol">-</span>
+                                    </button>
+                                </span>
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody id="reporting-top-stores-body"></tbody>
+                </table>
+            </div>
+        </div>
+        <div class="analytics-table-card">
+            <h3>Top Devices by Incidents</h3>
+            <div class="analytics-table-wrap">
+                <table class="analytics-table analytics-table-cols-6 analytics-reporting-filter-table top-device-categories-report-table" aria-label="Top device categories by incidents">
+                    <thead>
+                        <tr id="reporting-top-device-categories-filters" class="reporting-filter-head-row">
+                            <th scope="col" class="unreported-th-merged">
+                                <span class="unreported-h-group">
+                                    <input type="hidden" id="tdc-filter-category-order" value="" />
+                                    <button type="button" class="analytics-th-sort-btn" data-sort-input="tdc-filter-category-order" aria-label="Sort by device category">
+                                        <span class="analytics-th-sort-name">Category</span><span class="analytics-th-sort-sep" aria-hidden="true"> </span><span class="analytics-th-sort-symbol">-</span>
+                                    </button>
+                                </span>
+                            </th>
+                            <th scope="col" class="unreported-th-merged">
+                                <span class="unreported-h-group">
+                                    <input type="hidden" id="tdc-filter-incidents-order" value="" />
+                                    <button type="button" class="analytics-th-sort-btn" data-sort-input="tdc-filter-incidents-order" aria-label="Sort incidents">
+                                        <span class="analytics-th-sort-name">Incidents</span><span class="analytics-th-sort-sep" aria-hidden="true"> </span><span class="analytics-th-sort-symbol">-</span>
+                                    </button>
+                                </span>
+                            </th>
+                            <th scope="col" class="unreported-th-merged">
+                                <span class="unreported-h-group">
+                                    <input type="hidden" id="tdc-filter-downtime-order" value="" />
+                                    <button type="button" class="analytics-th-sort-btn" data-sort-input="tdc-filter-downtime-order" aria-label="Sort downtime minutes">
+                                        <span class="analytics-th-sort-name">Downtime Minutes</span><span class="analytics-th-sort-sep" aria-hidden="true"> </span><span class="analytics-th-sort-symbol">-</span>
+                                    </button>
+                                </span>
+                            </th>
+                            <th scope="col" class="unreported-th-merged">
+                                <span class="unreported-h-group">
+                                    <input type="hidden" id="tdc-filter-mttr-order" value="" />
+                                    <button type="button" class="analytics-th-sort-btn" data-sort-input="tdc-filter-mttr-order" aria-label="Sort resolve time">
+                                        <span class="analytics-th-sort-name">Resolve Time</span><span class="analytics-th-sort-sep" aria-hidden="true"> </span><span class="analytics-th-sort-symbol">-</span>
+                                    </button>
+                                </span>
+                            </th>
+                            <th scope="col" class="unreported-th-merged">
+                                <span class="unreported-h-group">
+                                    <input type="hidden" id="tdc-filter-ttr-avg-order" value="" />
+                                    <button type="button" class="analytics-th-sort-btn" data-sort-input="tdc-filter-ttr-avg-order" aria-label="Sort time to report average">
+                                        <span class="analytics-th-sort-name">Time To Report Avg</span><span class="analytics-th-sort-sep" aria-hidden="true"> </span><span class="analytics-th-sort-symbol">-</span>
+                                    </button>
+                                </span>
+                            </th>
+                            <th scope="col" class="unreported-th-merged">
+                                <span class="unreported-h-group">
+                                    <input type="hidden" id="tdc-filter-rtr-avg-order" value="" />
+                                    <button type="button" class="analytics-th-sort-btn" data-sort-input="tdc-filter-rtr-avg-order" aria-label="Sort report to resolve average">
+                                        <span class="analytics-th-sort-name">Report To Resolve Avg</span><span class="analytics-th-sort-sep" aria-hidden="true"> </span><span class="analytics-th-sort-symbol">-</span>
+                                    </button>
+                                </span>
+                            </th>
+                        </tr>
+                    </thead>
+                    <tbody id="reporting-top-device-categories-body"></tbody>
+                </table>
+            </div>
+        </div>
+        <div class="analytics-table-card">
+            <h3>Owner Workload</h3>
+            <div class="analytics-table-wrap analytics-table-wrap--header-dropdown">
+                <div class="analytics-owner-workload analytics-reporting-filter-table" role="table" aria-label="Owner workload">
+                    <div class="analytics-ow-grid-header reporting-ow-filter-head reporting-filter-head-row" id="reporting-owner-workload-filters" role="row">
+                        <span role="columnheader" class="analytics-ow-h-owner unreported-th-merged unreported-th-filter-device">
+                            <span class="unreported-h-group">
+                                <span class="unreported-h-text">Owner</span>
+                                <span class="unreported-h-filt">
+                                    <details class="analytics-filter-device-details" id="ow-owner-filter-details">
+                                        <summary class="analytics-filter-summary-mini" id="ow-owner-filter-summary" title="Filter by owner"></summary>
+                                        <div class="analytics-filter-checklist" id="ow-owner-filter-checklist-body"></div>
+                                    </details>
+                                </span>
+                            </span>
+                        </span>
+                        <span role="columnheader" class="analytics-ow-h-reports unreported-th-merged">
+                            <span class="unreported-h-group">
+                                <input type="hidden" id="ow-filter-count-order" value="" />
+                                <button type="button" class="analytics-th-sort-btn" data-sort-input="ow-filter-count-order" aria-label="Sort reports count">
+                                    <span class="analytics-th-sort-name">Reports Count</span><span class="analytics-th-sort-sep" aria-hidden="true"> </span><span class="analytics-th-sort-symbol">-</span>
+                                </button>
+                            </span>
+                        </span>
+                    </div>
+                    <div id="reporting-owner-workload-body" class="analytics-ow-grid-body"></div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <div id="device-details-modal" class="device-details-modal" role="dialog" aria-labelledby="device-details-title" aria-hidden="true">
+        <div class="device-details-content">
+            <div class="device-details-header">
+                <h3 id="device-details-title">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true">
+                        <circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>
+                    </svg>
+                    <span id="device-details-location-name">Device Details</span>
+                </h3>
+                <button id="device-details-close" class="device-details-close" aria-label="Close details">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true">
+                        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="device-details-body" id="device-details-body"></div>
+        </div>
+    </div>
+
+    <div id="pc-ticket-modal" class="pc-ticket-modal" role="dialog" aria-labelledby="pc-ticket-title" aria-hidden="true">
+        <div class="pc-ticket-content">
+            <div class="pc-ticket-header">
+                <h3 id="pc-ticket-title">Device Ticket</h3>
+                <button id="pc-ticket-close" class="device-details-close" aria-label="Close">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true">
+                        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="pc-ticket-body">
+                <div class="pc-ticket-device" id="pc-ticket-device-name">Price Checker</div>
+                <div class="pc-ticket-reported" id="pc-ticket-reported-status">Not Reported</div>
+                <div class="pc-ticket-meta pc-ticket-meta--owner" id="pc-ticket-owner-meta" style="display:none;">
+                    <div class="pc-ticket-meta-row">
+                        <span class="pc-ticket-meta-label">Owner</span>
+                        <span class="pc-ticket-meta-value" id="pc-ticket-owner-value">-</span>
+                    </div>
+                </div>
+                <div class="pc-ticket-meta pc-ticket-meta--timings" id="pc-ticket-timings-meta" style="display:none;">
+                    <div class="pc-ticket-meta-row">
+                        <span class="pc-ticket-meta-label">Start Downtime</span>
+                        <span class="pc-ticket-meta-value" id="pc-ticket-dt-start">-</span>
+                    </div>
+                    <div class="pc-ticket-meta-row">
+                        <span class="pc-ticket-meta-label">End Downtime</span>
+                        <span class="pc-ticket-meta-value" id="pc-ticket-dt-end">-</span>
+                    </div>
+                    <div class="pc-ticket-meta-row">
+                        <span class="pc-ticket-meta-label">Duration Downtime</span>
+                        <span class="pc-ticket-meta-value" id="pc-ticket-dt-duration">-</span>
+                    </div>
+                    <div class="pc-ticket-meta-row" id="pc-ticket-reported-at-row">
+                        <span class="pc-ticket-meta-label">Reported</span>
+                        <span class="pc-ticket-meta-value" id="pc-ticket-time-to-report">-</span>
+                    </div>
+                    <div class="pc-ticket-meta-row" id="pc-ticket-solved-at-row">
+                        <span class="pc-ticket-meta-label">Solved</span>
+                        <span class="pc-ticket-meta-value" id="pc-ticket-time-to-resolve">-</span>
+                    </div>
+                </div>
+                <label for="pc-ticket-link-input">CRM Ticket Link</label>
+                <a id="pc-ticket-link-view" class="pc-ticket-link-view" href="#" target="_blank" rel="noopener noreferrer" style="display:none;">
+                    Open CRM ticket
+                </a>
+                <input
+                    id="pc-ticket-link-input"
+                    class="pc-ticket-input"
+                    type="url"
+                    placeholder="https://crm.avroraro.lan/"
+                    autocomplete="off"
+                />
+                <label id="pc-ticket-tag-label">Tag</label>
+                <span id="pc-ticket-tag-display" class="pc-ticket-tag-pill" hidden></span>
+                <div class="pc-ticket-tag-stack">
+                    <div class="pc-ticket-tag-picker" id="pc-ticket-tag-picker" hidden>
+                        <button
+                            type="button"
+                            class="pc-ticket-tag-trigger"
+                            id="pc-ticket-tag-trigger"
+                            aria-haspopup="listbox"
+                            aria-expanded="false"
+                            aria-labelledby="pc-ticket-tag-label"
+                        >
+                            <span class="pc-ticket-tag-trigger-text is-placeholder" id="pc-ticket-tag-trigger-text">Select tag</span>
+                            <span class="pc-ticket-tag-trigger-chevron" aria-hidden="true"></span>
+                        </button>
+                        <ul class="pc-ticket-tag-menu" id="pc-ticket-tag-menu" role="listbox" hidden></ul>
+                    </div>
+                    <select id="pc-ticket-tag-select" class="pc-ticket-tag-select-sr" aria-labelledby="pc-ticket-tag-label" tabindex="-1">
+                        <option value="">Select tag</option>
+                    </select>
+                </div>
+                <div class="pc-ticket-owner-lock" id="pc-ticket-owner-lock" style="display:none;">
+                    Only the owner can edit or delete this report.
+                </div>
+            </div>
+            <div class="pc-ticket-footer">
+                <button id="pc-ticket-delete-btn" class="pc-ticket-btn danger" type="button" style="display:none;">Delete</button>
+                <button id="pc-ticket-edit-btn" class="pc-ticket-btn secondary" type="button" style="display:none;">Edit</button>
+                <button id="pc-ticket-reopen-btn" class="pc-ticket-btn secondary" type="button" style="display:none;">Reopen</button>
+                <button id="pc-ticket-solve-btn" class="pc-ticket-btn success" type="button" style="display:none;">Solved</button>
+                <button id="pc-ticket-cancel-edit-btn" class="pc-ticket-btn secondary" type="button" style="display:none;">Cancel Edit</button>
+                <button id="pc-ticket-save-btn" class="pc-ticket-btn primary" type="button">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="delete-report-confirm-modal" class="delete-report-confirm-modal" role="dialog" aria-labelledby="delete-report-confirm-title" aria-modal="true" aria-hidden="true">
+        <div class="delete-report-confirm-content">
+            <div class="delete-report-confirm-header">
+                <h3 id="delete-report-confirm-title">Delete report</h3>
+                <button type="button" id="delete-report-confirm-close" class="device-details-close" aria-label="Close">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true">
+                        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="delete-report-confirm-body">
+                <p id="delete-report-confirm-message">Are you sure you want to delete this report? This removes the CRM link from the incident.</p>
+            </div>
+            <div class="delete-report-confirm-footer">
+                <button type="button" id="delete-report-confirm-cancel" class="pc-ticket-btn secondary">Cancel</button>
+                <button type="button" id="delete-report-confirm-confirm" class="pc-ticket-btn danger">Delete</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="non-internet-issue-modal" class="non-internet-issue-modal" role="dialog" aria-labelledby="non-internet-issue-title" aria-hidden="true">
+        <div class="non-internet-issue-content">
+            <div class="non-internet-issue-header">
+                <h3 id="non-internet-issue-title">Add Non Internet Issue</h3>
+                <button id="non-internet-issue-close" class="device-details-close" aria-label="Close">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true">
+                        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="non-internet-issue-body">
+                <label for="nii-store-input">Store Number</label>
+                <input id="nii-store-input" class="non-internet-issue-input" type="text" placeholder="ex: 83" inputmode="numeric" pattern="[0-9]*" autocomplete="off" />
+
+                <label for="nii-device-select">Device</label>
+                <select id="nii-device-select" class="non-internet-issue-input">
+                    <option value="price-checkers">Price Checker</option>
+                    <option value="cash-register">Cash Register</option>
+                    <option value="inside-music">Inside Music</option>
+                    <option value="outside-music">Outside Music</option>
+                </select>
+
+                <div id="nii-device-number-row" class="non-internet-issue-extra-row">
+                    <label for="nii-device-number-input">Device Number</label>
+                    <select id="nii-cash-number-select" class="non-internet-issue-input" style="display:none;">
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                    </select>
+                    <input id="nii-device-number-input" class="non-internet-issue-input" type="text" placeholder="ex: 1" inputmode="numeric" pattern="[0-9]*" maxlength="2" autocomplete="off" />
+                </div>
+
+                <label for="nii-link-input">CRM Ticket Link</label>
+                <input id="nii-link-input" class="non-internet-issue-input" type="url" placeholder="https://crm.avroraro.lan/" autocomplete="off" />
+                <label id="nii-tag-label" for="nii-tag-select">Tag</label>
+                <span id="nii-tag-display" class="pc-ticket-tag-pill" hidden></span>
+                <div class="pc-ticket-tag-stack nii-tag-stack">
+                    <div class="pc-ticket-tag-picker" id="nii-tag-picker">
+                        <button
+                            type="button"
+                            class="pc-ticket-tag-trigger"
+                            id="nii-tag-trigger"
+                            aria-haspopup="listbox"
+                            aria-expanded="false"
+                            aria-labelledby="nii-tag-label"
+                        >
+                            <span class="pc-ticket-tag-trigger-text is-placeholder" id="nii-tag-trigger-text">Select tag</span>
+                            <span class="pc-ticket-tag-trigger-chevron" aria-hidden="true"></span>
+                        </button>
+                        <ul class="pc-ticket-tag-menu" id="nii-tag-menu" role="listbox" hidden></ul>
+                    </div>
+                    <select id="nii-tag-select" class="pc-ticket-tag-select-sr" aria-labelledby="nii-tag-label" tabindex="-1">
+                        <option value="">Select tag</option>
+                        <option value="troubleshooting">Troubleshooting</option>
+                        <option value="partial-replacement">Partial Replacement</option>
+                        <option value="full-replacement">Full Replacement</option>
+                    </select>
+                </div>
+            </div>
+            <div class="non-internet-issue-footer">
+                <button id="non-internet-issue-cancel" class="pc-ticket-btn secondary" type="button">Cancel</button>
+                <button id="non-internet-issue-save" class="pc-ticket-btn primary" type="button" disabled>Save</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="true"></div>
+
+    <div id="panel-info-modal" class="panel-info-modal" role="dialog" aria-labelledby="panel-info-title" aria-hidden="true">
+        <div class="panel-info-content">
+            <div class="panel-info-header">
+                <h3 id="panel-info-title">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15" height="15" aria-hidden="true">
+                        <circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>
+                    </svg>
+                    About This Panel
+                </h3>
+                <button id="panel-info-close" class="device-details-close" aria-label="Close">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                        stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="14" height="14" aria-hidden="true">
+                        <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="panel-info-body">
+                <p>Real-time network connectivity and offline time monitoring for all in-store devices.</p>
+                <ul>
+                    <li><strong>P UP / P Down</strong> — Primary ISP connection status (P Down = orange)</li>
+                    <li><strong>B UP / B Down / B None</strong> — Backup ISP connection status (B Down = yellow)</li>
+                    <li><strong>Card border color</strong> — Green = active · Orange = on backup · Red = down</li>
+                    <li><strong>▲ triangle</strong> — A sub-device (switch, cash register, admin PC) has an issue</li>
+                    <li><strong>Click a card</strong> — Opens full device detail for that store</li>
+                    <li><strong>Offline Time Report</strong> — Downtime per category plus <strong>Primary/Backup WAN %</strong> (store hours, refId X/Y in the panel)</li>
+                </ul>
+                <hr class="info-divider">
+                <p><strong>Summary card meanings:</strong></p>
+                <ul>
+                    <li><strong>Active</strong> — Connected normally via primary link</li>
+                    <li><strong>Inactive</strong> — All connections are down</li>
+                    <li><strong>On Backup</strong> — Running on backup (primary down)</li>
+                    <li><strong>Backup Down</strong> — Backup configured but unreachable</li>
+                    <li><strong>No Backup</strong> — No backup ISP configured</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</main>
+    </div>
+  </div>
+</div>
+<script src="/prom-adapter.js?v=21"></script>
+<script src="/modules/utils.js?v=17"></script>
+<script src="/modules/constants.js?v=2"></script>
+<script src="/modules/api-base.js?v=1"></script>
+<script src="/modules/device-format.js?v=1"></script>
+<script src="/modules/parsers.js?v=2"></script>
+<script src="/modules/ticket-links.js?v=2"></script>
+<script src="/modules/incident-dedup.js?v=2"></script>
+<script src="/modules/view-state.js?v=4"></script>
+<script src="/modules/date-range-state.js?v=3"></script>
+<script src="/modules/live-refresh.js?v=1"></script>
+<script src="/modules/time-range.js?v=1"></script>
+<script src="/modules/render-offline.js?v=1"></script>
+<script src="/modules/modals.js?v=1"></script>
+<script src="/script.js?v=55"></script>
+<script src="/js/shell.js?v=30"></script>
+<script src="/js/router-timeline.js?v=5"></script>
+<script src="/panel-bootstrap.js?v=23"></script>
+</body>
+</html>

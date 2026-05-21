@@ -1,0 +1,6 @@
+.env
+backend/app/__pycache__/
+.DS_Store
+Thumbs.db
+*.swp
+*~
