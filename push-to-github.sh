@@ -5,6 +5,8 @@ cd "$(dirname "$0")"
 
 REMOTE="${REMOTE:-origin}"
 BRANCH="${BRANCH:-main}"
+DEPLOY_KEY="${DEPLOY_KEY:-$HOME/.ssh/grafana_incidents_deploy}"
+export GIT_SSH_COMMAND="ssh -i ${DEPLOY_KEY} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
 
 if ! git rev-parse --is-inside-work-tree &>/dev/null; then
   git init -b "$BRANCH"
