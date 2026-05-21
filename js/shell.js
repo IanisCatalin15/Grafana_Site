@@ -162,7 +162,7 @@
     html += `
       <div class="app-sidebar__footer">
         <button type="button" class="app-sidebar__collapse" id="app-sidebar-collapse" aria-label="Collapse sidebar" title="Collapse sidebar">
-          <i class="fa-solid fa-fw fa-angles-left" aria-hidden="true"></i>
+          <i class="fa-solid fa-fw fa-angles-right" aria-hidden="true"></i>
           <span class="app-sidebar__collapse-label">Collapse</span>
         </button>
       </div>`;
@@ -200,7 +200,7 @@
       const label = btn.querySelector('.app-sidebar__collapse-label');
       if (icon) {
         icon.classList.remove('fa-angles-left', 'fa-angles-right');
-        icon.classList.add(collapsed ? 'fa-angles-right' : 'fa-angles-left');
+        icon.classList.add(collapsed ? 'fa-angles-left' : 'fa-angles-right');
       }
       if (label) label.textContent = collapsed ? 'Expand' : 'Collapse';
       btn.setAttribute('aria-label', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
