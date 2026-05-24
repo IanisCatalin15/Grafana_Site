@@ -223,6 +223,31 @@
   }
 
   /**
+   * Map an offline-metric `store` label to the router card name (AR####, Office, WH 1, …).
+   * Returns null for orphan device_ping rows with no router (e.g. decommissioned AR0076).
+   */
+  function resolveCanonicalOfflineStoreLabel(storeLabel, dataMap) {
+    const lists = [
+      ...(dataMap && Array.isArray(dataMap.routers) ? dataMap.routers : []),
+      ...(dataMap && Array.isArray(dataMap['project-routers']) ? dataMap['project-routers'] : [])
+    ];
+    if (!lists.length) return null;
+    const raw = String(storeLabel || '').trim();
+    if (!raw) return null;
+    const code = _extractStoreCode(raw);
+    const nk = normalizeOntLookupKey(raw);
+    const ck = compactOntLookupKey(raw);
+    for (let i = 0; i < lists.length; i++) {
+      const name = String(lists[i]?.name || '').trim();
+      if (!name) continue;
+      if (code && _extractStoreCode(name) === code) return name;
+      if (nk && normalizeOntLookupKey(name) === nk) return name;
+      if (ck && compactOntLookupKey(name) === ck) return name;
+    }
+    return null;
+  }
+
+  /**
    * Mutates `rows` adding primaryUptimePct / backupUptimePct / internetUptimePct
    * from scheduled-down minutes (refs X / Y / Z) over the panel time range.
    * Missing values (null) are treated as 0 down minutes → 100% uptime when S > 0.
@@ -285,6 +310,21 @@
       (primaryIsDown && (backupIsDown || backupIsNone)) ||
       (primaryIsNone && backupIsDown)
     );
+  }
+
+  /** Live Overview Priority sort: Internet Down → Primary Down → Backup Down → other. */
+  function getRouterLivePriorityRank(d, priorityOrder) {
+    if (!d) return 99;
+    if (isInternetDownRouter(d)) return 1;
+    const pStat = String(d.ontPrimaryStatus || '').toLowerCase();
+    const bStat = String(d.ontBackupStatus || '').toLowerCase();
+    const bTxtRaw = String(d.ontBackupText != null ? d.ontBackupText : 'UNKNOWN').trim();
+    const hasBackup = bTxtRaw.toUpperCase() !== 'NONE';
+    if (pStat === 'down' || pStat === 'none') return 2;
+    if (hasBackup && bStat === 'down') return 3;
+    const PO = priorityOrder || { inactive: 1, warning: 2, active: 3 };
+    const st = d.combinedStatus || d.status || 'active';
+    return 10 + (PO[st] ?? 99);
   }
 
   function combineRouterStatuses(dataMap) {
@@ -390,8 +430,10 @@
     normalizeOntLookupKey,
     compactOntLookupKey,
     isInternetDownRouter,
+    getRouterLivePriorityRank,
     buildRouterOntByStore,
     lookupOntForOfflineStore,
+    resolveCanonicalOfflineStoreLabel,
     applyInternetUptimeToOfflineRows,
     combineRouterStatuses,
     knownStoreCodesSet

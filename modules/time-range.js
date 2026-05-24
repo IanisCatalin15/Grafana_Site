@@ -83,7 +83,7 @@
           return { from: fromMs.toString(), to: toMs.toString() };
         }
       }
-      return { from: 'now-6h', to: 'now' };
+      return { from: 'now-12h', to: 'now' };
     };
 
     const updateSelectionPreview = (fromParam, toParam) => {
@@ -181,9 +181,9 @@
         updateButtonAndHighlight('History: Custom Range', datePickerTrigger, false);
       }
       updateSelectionPreview(fromParam, toParam);
-    } else if (TIME_RANGE_LABELS['now-6h']) {
-      updateButtonAndHighlight(TIME_RANGE_LABELS['now-6h'].full, htmlNode.querySelector('[data-range="now-6h"]'), true);
-      updateSelectionPreview('now-6h', 'now');
+    } else if (TIME_RANGE_LABELS['now-12h']) {
+      updateButtonAndHighlight(TIME_RANGE_LABELS['now-12h'].full, htmlNode.querySelector('[data-range="now-12h"]'), true);
+      updateSelectionPreview('now-12h', 'now');
     }
 
     timeRangeBtns.forEach((button) => {

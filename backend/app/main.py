@@ -57,6 +57,7 @@ STORE_WAN_BLACKOUT_ALERT = "DeviceStoreNoInternet"
 BACKUP_LINK_ALERT = "DeviceOfflineRouterBackup"
 
 INTERNET_REPORT_TAGS = {"power-outage", "network-issue", "planned"}
+INTERNET_REPORT_TAGS_NO_TICKET_REQUIRED = frozenset({"power-outage", "planned"})
 DEVICE_REPORT_TAGS = {"troubleshooting", "partial-replacement", "full-replacement"}
 
 
@@ -187,6 +188,31 @@ def is_internet_issue_ticket(device_type: Optional[str], device_name: Optional[s
     return dn.endswith("-INTERNET")
 
 
+def is_internet_tag_only_report_allowed(
+    report_tag: str, device_type: Optional[str], device_name: Optional[str]
+) -> bool:
+    """Internet Down with power-outage or planned may be filed without a CRM ticket URL."""
+    if not is_internet_issue_ticket(device_type, device_name):
+        return False
+    return normalize_report_tag(report_tag) in INTERNET_REPORT_TAGS_NO_TICKET_REQUIRED
+
+
+def _sql_incident_is_reported(alias: Optional[str] = "di") -> str:
+    """SQL predicate: incident counts as operator-reported (CRM URL or tag-only internet report)."""
+    prefix = f"{alias}." if alias else ""
+    return f"""(
+      coalesce({prefix}crm_ticket_url, '') <> ''
+      or (
+        {prefix}reported_at is not null
+        and coalesce({prefix}report_tag, '') in ('power-outage', 'planned')
+        and (
+          coalesce({prefix}device_type, '') in ('primary-link', 'backup-link')
+          or right(upper(coalesce({prefix}device_name, '')), 9) = '-INTERNET'
+        )
+      )
+    )"""
+
+
 def validate_report_tag_or_raise(report_tag: str, device_type: Optional[str], device_name: Optional[str]) -> str:
     tag = normalize_report_tag(report_tag)
     if not tag:
@@ -242,7 +268,7 @@ def parse_epoch_ms(value: Optional[int]) -> Optional[datetime]:
 
 
 class TicketPayload(BaseModel):
-    ticketUrl: str
+    ticketUrl: Optional[str] = ""
     ticketId: Optional[str] = None
     deviceType: Optional[str] = None
     storeCode: Optional[str] = None
@@ -401,31 +427,31 @@ def ensure_ticket_owner_column():
                 "create index if not exists idx_device_incidents_resolved_at on device_incidents (resolved_at desc)"
             )
             cursor.execute(
-                """
+                f"""
                 create or replace view v_incidents_unreported as
                 select
-                  id,
-                  store_code,
-                  device_name,
-                  device_type,
-                  offline_started_at,
-                  offline_ended_at,
-                  duration_minutes,
-                  incident_status,
-                  crm_ticket_url,
-                  crm_ticket_id,
-                  source_alert,
+                  di.id,
+                  di.store_code,
+                  di.device_name,
+                  di.device_type,
+                  di.offline_started_at,
+                  di.offline_ended_at,
+                  di.duration_minutes,
+                  di.incident_status,
+                  di.crm_ticket_url,
+                  di.crm_ticket_id,
+                  di.source_alert,
                   case
-                    when incident_status = 'closed' and coalesce(crm_ticket_url, '') = '' then 'Online but downtime unreported'
-                    when incident_status = 'open' and coalesce(crm_ticket_url, '') = '' then 'Offline and unreported'
-                    when coalesce(crm_ticket_url, '') <> '' then 'Reported'
+                    when di.incident_status = 'closed' and not ({_sql_incident_is_reported('di')}) then 'Online but downtime unreported'
+                    when di.incident_status = 'open' and not ({_sql_incident_is_reported('di')}) then 'Offline and unreported'
+                    when ({_sql_incident_is_reported('di')}) then 'Reported'
                     else 'Unknown'
                   end as report_state
-                from device_incidents
-                where coalesce(crm_ticket_url, '') = ''
+                from device_incidents di
+                where not ({_sql_incident_is_reported('di')})
                   and (
-                    incident_status = 'open'
-                    or coalesce(duration_minutes, 0) >= %s
+                    di.incident_status = 'open'
+                    or coalesce(di.duration_minutes, 0) >= %s
                   )
                 """,
                 (MIN_INCIDENT_DURATION_PERSIST_MINUTES,),
@@ -485,6 +511,86 @@ def get_ticket(device_name: str):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+def _apply_tag_only_internet_report_to_incident(
+    cursor,
+    *,
+    normalized_device: str,
+    device_name_alias: Optional[str],
+    device_type: Optional[str],
+    store_code: Optional[str],
+    actor_name: str,
+    report_tag: str,
+) -> Optional[int]:
+    """Mark an internet incident reported by tag only (no CRM URL)."""
+    cursor.execute(
+        """
+        with target as (
+          select id
+          from device_incidents
+          where (
+              upper(device_name) = upper(%s)
+              or (%s is not null and upper(device_name) = upper(%s))
+              or (
+                  coalesce(%s, '') <> ''
+                  and upper(store_code) = upper(%s)
+                  and coalesce(device_type, '') = coalesce(%s, '')
+              )
+            )
+            and coalesce(crm_ticket_url, '') = ''
+          order by
+            case when incident_status = 'open' then 0 else 1 end,
+            offline_started_at desc
+          limit 1
+        )
+        update device_incidents di
+        set
+          owner_name = coalesce(nullif(trim(%s), ''), di.owner_name),
+          report_tag = coalesce(%s, di.report_tag),
+          reported_at = coalesce(di.reported_at, now()),
+          updated_at = now()
+        from target
+        where di.id = target.id
+        returning di.id
+        """,
+        (
+            normalized_device,
+            device_name_alias,
+            device_name_alias,
+            device_type,
+            store_code,
+            device_type,
+            actor_name,
+            report_tag,
+        ),
+    )
+    linked = cursor.fetchone()
+    if linked and linked.get("id") is not None:
+        return int(linked["id"])
+    if not store_code or not device_type:
+        return None
+    cursor.execute(
+        """
+        insert into device_incidents (
+          store_code, device_name, device_type,
+          offline_started_at, incident_status,
+          owner_name, report_tag, reported_at, source_alert
+        )
+        values (%s, %s, %s, now(), 'open', %s, %s, now(), 'operator')
+        on conflict (store_code, device_name, incident_status)
+        where incident_status = 'open'
+        do update set
+          owner_name = coalesce(excluded.owner_name, device_incidents.owner_name),
+          report_tag = coalesce(excluded.report_tag, device_incidents.report_tag),
+          reported_at = coalesce(device_incidents.reported_at, excluded.reported_at),
+          updated_at = now()
+        returning id
+        """,
+        (store_code, normalized_device, device_type, actor_name, report_tag),
+    )
+    inserted = cursor.fetchone()
+    return int(inserted["id"]) if inserted and inserted.get("id") is not None else None
+
+
 @app.put("/api/tickets/{device_name}")
 def put_ticket(
     device_name: str,
@@ -492,23 +598,68 @@ def put_ticket(
     mark_incident: bool = Query(default=True),
 ):
     normalized_device = device_name.strip()
-    ticket_url = payload.ticketUrl.strip()
+    ticket_url = (payload.ticketUrl or "").strip()
     ticket_id = (payload.ticketId or "").strip() or None
     device_type = (payload.deviceType or "").strip() or None
     store_code = (payload.storeCode or "").strip() or parse_store_from_device_name(normalized_device)
     actor_name = (payload.actorName or "").strip()
     report_tag = validate_report_tag_or_raise(payload.reportTag, device_type, normalized_device)
     device_name_alias = price_checker_ticket_name_alias(normalized_device)
+    tag_only_report = is_internet_tag_only_report_allowed(report_tag, device_type, normalized_device) and not ticket_url
 
-    if not normalized_device or not ticket_url or not actor_name:
+    if not normalized_device or not actor_name:
+        raise HTTPException(status_code=400, detail="deviceName and actorName are required")
+    if not ticket_url and not tag_only_report:
         raise HTTPException(status_code=400, detail="deviceName, ticketUrl and actorName are required")
-
-    parsed = urlparse(ticket_url)
-    if parsed.scheme not in ("http", "https"):
-        raise HTTPException(status_code=400, detail="ticketUrl must start with http:// or https://")
+    if ticket_url:
+        parsed = urlparse(ticket_url)
+        if parsed.scheme not in ("http", "https"):
+            raise HTTPException(status_code=400, detail="ticketUrl must start with http:// or https://")
 
     try:
         with db_cursor() as (conn, cursor):
+            if tag_only_report:
+                if not mark_incident:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Tag-only internet reports must be linked to an incident",
+                    )
+                _apply_tag_only_internet_report_to_incident(
+                    cursor,
+                    normalized_device=normalized_device,
+                    device_name_alias=device_name_alias,
+                    device_type=device_type,
+                    store_code=store_code,
+                    actor_name=actor_name,
+                    report_tag=report_tag,
+                )
+                conn.commit()
+                broadcast_event(
+                    "ticket_linked",
+                    {
+                        "source": "operator",
+                        "device_name": normalized_device,
+                        "device_type": device_type,
+                        "store_code": store_code,
+                        "ticket_url": "",
+                        "report_tag": report_tag,
+                        "tag_only": True,
+                    },
+                )
+                return {
+                    "ticket": normalize_row(
+                        {
+                            "store_code": store_code,
+                            "device_name": normalized_device,
+                            "device_type": device_type,
+                            "owner_name": actor_name,
+                            "report_tag": report_tag,
+                            "ticket_url": "",
+                            "ticket_id": None,
+                        }
+                    )
+                }
+
             cursor.execute(
                 """
                 select ticket_url
@@ -980,6 +1131,44 @@ def delete_ticket(device_name: str, actorName: str = Query(default="")):
                 (normalized_device,),
             )
             existing = cursor.fetchone()
+
+            if not existing or not (existing.get("ticket_url") or "").strip():
+                cursor.execute(
+                    f"""
+                    update device_incidents
+                    set
+                      report_tag = null,
+                      reported_at = null,
+                      owner_name = null,
+                      updated_at = now()
+                    where upper(device_name) = upper(%s)
+                      and coalesce(crm_ticket_url, '') = ''
+                      and reported_at is not null
+                      and coalesce(report_tag, '') in ('power-outage', 'planned')
+                      and (
+                        coalesce(device_type, '') in ('primary-link', 'backup-link')
+                        or right(upper(coalesce(device_name, '')), 9) = '-INTERNET'
+                      )
+                    """,
+                    (normalized_device,),
+                )
+                tag_only_cleared = cursor.rowcount or 0
+                if tag_only_cleared:
+                    conn.commit()
+                    broadcast_event(
+                        "ticket_deleted",
+                        {
+                            "source": "operator",
+                            "device_name": normalized_device,
+                            "tag_only_cleared": tag_only_cleared,
+                        },
+                    )
+                    return {
+                        "ok": True,
+                        "tickets_deleted": 0,
+                        "incidents_cleared": tag_only_cleared,
+                        "incidents_deleted": 0,
+                    }
 
             cursor.execute("delete from crm_device_tickets where upper(device_name) = upper(%s)", (normalized_device,))
             tickets_deleted = cursor.rowcount or 0
@@ -1595,7 +1784,27 @@ def _offline_ended_at_is_synthetic_scrape_stop_bucharest(ended_at: datetime) -> 
     return loc.hour * 60 + loc.minute >= MONITORING_END_MINUTES_BUCHAREST
 
 
-def _reporting_overlay_unreported_row_as_unresolved_if_synthetic_evening_close(row: Dict[str, Any]) -> Dict[str, Any]:
+def _unreported_device_identity_key(row: Dict[str, Any]) -> str:
+    return (row.get("device_name") or "").strip().upper()
+
+
+def _unreported_real_open_device_keys(rows: List[Dict[str, Any]]) -> Set[str]:
+    """Devices that already have a genuine open row in this page (not overlay-reopened)."""
+    out: Set[str] = set()
+    for row in rows:
+        if (row.get("incident_status") or "").strip().lower() != "open":
+            continue
+        key = _unreported_device_identity_key(row)
+        if key:
+            out.add(key)
+    return out
+
+
+def _reporting_overlay_unreported_row_as_unresolved_if_synthetic_evening_close(
+    row: Dict[str, Any],
+    *,
+    devices_with_real_open: Optional[Set[str]] = None,
+) -> Dict[str, Any]:
     """List/API: show unreported rows still ongoing when end time is the evening scrape cut-off."""
     out = dict(row)
     if (out.get("incident_status") or "").strip().lower() != "closed":
@@ -1604,6 +1813,9 @@ def _reporting_overlay_unreported_row_as_unresolved_if_synthetic_evening_close(r
     if not ended or not isinstance(ended, datetime):
         return out
     if not _offline_ended_at_is_synthetic_scrape_stop_bucharest(ended):
+        return out
+    key = _unreported_device_identity_key(out)
+    if devices_with_real_open and key and key in devices_with_real_open:
         return out
     out["incident_status"] = "open"
     out["offline_ended_at"] = None
@@ -2145,14 +2357,14 @@ def reporting_overview(
                   count(*) filter (where incident_status = 'open') as incidents_open,
                   count(*) filter (where incident_status = 'closed') as incidents_closed,
                   count(*) filter (
-                    where coalesce(crm_ticket_url, '') = ''
+                    where not ({_sql_incident_is_reported('')})
                       and (
                         incident_status = 'open'
                         or coalesce(duration_minutes, 0) >= %s
                       )
                   ) as incidents_unreported,
                   count(*) filter (
-                    where coalesce(crm_ticket_url, '') <> ''
+                    where ({_sql_incident_is_reported('')})
                   ) as incidents_reported,
                   round(avg(duration_minutes) filter (where incident_status = 'closed'), 2) as mttr_minutes
                 from base
@@ -2185,7 +2397,7 @@ _UNREPORTED_LIST_WHERE = f"""
                     or offline_ended_at >= coalesce(%s::timestamptz, now() - (%s * interval '1 day'))
                     or {_SYNTHETIC_EVENING_CLOSE_SQL}
                   )
-                  and coalesce(crm_ticket_url, '') = ''
+                  and not ({_sql_incident_is_reported('')})
                   and (
                     incident_status = 'open'
                     or coalesce(duration_minutes, 0) >= %s
@@ -2238,9 +2450,14 @@ def reporting_unreported(
                 (to_ts, from_ts, days, MIN_INCIDENT_DURATION_PERSIST_MINUTES, limit, offset),
             )
             rows = cursor.fetchall()
+        raw_rows = [dict(row) for row in rows]
+        real_open_device_keys = _unreported_real_open_device_keys(raw_rows)
         overlaid = [
-            _reporting_overlay_unreported_row_as_unresolved_if_synthetic_evening_close(dict(row))
-            for row in rows
+            _reporting_overlay_unreported_row_as_unresolved_if_synthetic_evening_close(
+                row,
+                devices_with_real_open=real_open_device_keys,
+            )
+            for row in raw_rows
         ]
         overlaid.sort(key=_unreported_row_sort_key)
         returned = len(overlaid)
@@ -2332,7 +2549,7 @@ def _reported_rows_cte(mode: str) -> str:
               di.offline_ended_at is null
               or di.offline_ended_at >= coalesce(%s::timestamptz, now() - (%s * interval '1 day'))
             )
-            and coalesce(di.crm_ticket_url, '') <> ''
+            and ({_sql_incident_is_reported('di')})
             {status_clause}
     """
     if not only_open:
@@ -2505,6 +2722,73 @@ _OPEN_DOWNTIME_EXPR = (
     "case when incident_status = 'open' then greatest(0, floor(extract(epoch from (now() - offline_started_at)) / 60))::int "
     "else coalesce(duration_minutes, 0) end"
 )
+
+
+_INTERNET_ISSUE_SQL = """
+    (
+      lower(coalesce(di.device_type, '')) in ('primary-link', 'backup-link')
+      or upper(coalesce(di.device_name, '')) like '%%-INTERNET'
+    )
+"""
+
+
+@app.get("/api/reporting/internet-power-outage")
+def reporting_internet_power_outage(
+    days: int = Query(default=30, ge=1, le=365),
+    from_ms: Optional[int] = Query(default=None),
+    to_ms: Optional[int] = Query(default=None),
+    tag: str = Query(default="power-outage"),
+):
+    """Internet Down incidents/tickets tagged power-outage or planned overlapping the report window.
+
+    Used by Offline Time Report to subtract credited outage minutes from Prometheus
+    internet downtime (ref Z) when operators filed a power-outage report, and to
+    surface planned maintenance minutes in tooltips.
+    """
+    report_tag = str(tag or "power-outage").strip().lower()
+    if report_tag not in INTERNET_REPORT_TAGS_NO_TICKET_REQUIRED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"tag must be one of: {', '.join(sorted(INTERNET_REPORT_TAGS_NO_TICKET_REQUIRED))}",
+        )
+    days = normalize_days(days)
+    from_ts = parse_epoch_ms(from_ms)
+    to_ts = parse_epoch_ms(to_ms)
+    try:
+        with db_cursor() as (_conn, cursor):
+            cursor.execute(
+                f"""
+                select
+                  di.store_code,
+                  di.device_name,
+                  di.device_type,
+                  di.report_tag,
+                  di.offline_started_at,
+                  di.offline_ended_at,
+                  di.incident_status
+                from device_incidents di
+                where lower(trim(coalesce(di.report_tag, ''))) = %s
+                  and {_INTERNET_ISSUE_SQL}
+                  and di.offline_started_at is not null
+                  and di.offline_started_at <= coalesce(%s::timestamptz, now())
+                  and (
+                    di.offline_ended_at is null
+                    or di.offline_ended_at >= coalesce(%s::timestamptz, now() - (%s * interval '1 day'))
+                  )
+                order by di.offline_started_at desc
+                """,
+                (report_tag, to_ts, from_ts, days),
+            )
+            rows = cursor.fetchall()
+        return {
+            "rows": [normalize_row(row) for row in rows],
+            "days": days,
+            "from_ms": from_ms,
+            "to_ms": to_ms,
+            "tag": report_tag,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
 
 @app.get("/api/reporting/top-stores")
@@ -2703,6 +2987,470 @@ def reporting_owner_workload(
             )
             rows = cursor.fetchall()
         return {"rows": [normalize_row(row) for row in rows], "days": days, "from_ms": from_ms, "to_ms": to_ms}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+# =============================================================================
+# Router Status Timeline — operator reports + update notes (Grafana_site page).
+# =============================================================================
+
+ROUTER_TIMELINE_CATEGORIES = frozenset({"Network", "Power Outage", "Planned", "Other"})
+
+
+def _validate_router_timeline_category(category: str) -> str:
+    cat = (category or "").strip()
+    if cat not in ROUTER_TIMELINE_CATEGORIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"category must be one of {sorted(ROUTER_TIMELINE_CATEGORIES)}",
+        )
+    return cat
+
+
+def _router_timeline_updates_subquery() -> str:
+    return """
+        coalesce(
+          (
+            select json_agg(
+              json_build_object(
+                'id', u.id,
+                'author_name', u.author_name,
+                'author_login', u.author_login,
+                'body', u.body,
+                'created_at', u.created_at,
+                'updated_at', u.updated_at
+              )
+              order by u.created_at desc
+            )
+            from router_timeline_report_updates u
+            where u.report_id = r.id
+          ),
+          '[]'::json
+        ) as updates
+    """
+
+
+def _serialize_router_timeline_report(row: dict) -> dict:
+    if not row:
+        return row
+    out = normalize_row(row)
+    updates = out.pop("updates", None)
+    if isinstance(updates, str):
+        try:
+            updates = json.loads(updates)
+        except Exception:
+            updates = []
+    if not isinstance(updates, list):
+        updates = []
+    out["updates"] = [normalize_row(u) if isinstance(u, dict) else u for u in updates]
+    return out
+
+
+class RouterTimelineReportCreate(BaseModel):
+    storeCode: str
+    category: str
+    description: str
+    reporterName: str
+    reporterLogin: Optional[str] = ""
+    reportedAtMs: Optional[int] = None
+    timelineStartMs: Optional[int] = None
+    timelineEndMs: Optional[int] = None
+    resolved: bool = False
+
+
+class RouterTimelineReportUpdate(BaseModel):
+    storeCode: Optional[str] = None
+    category: Optional[str] = None
+    description: Optional[str] = None
+    reporterName: Optional[str] = None
+    reporterLogin: Optional[str] = None
+    reportedAtMs: Optional[int] = None
+    timelineStartMs: Optional[int] = None
+    timelineEndMs: Optional[int] = None
+    resolved: Optional[bool] = None
+    resolvedAuto: Optional[bool] = None
+
+
+class RouterTimelineResolvedPatch(BaseModel):
+    resolved: bool = True
+    resolvedAuto: bool = False
+
+
+class RouterTimelineUpdateCreate(BaseModel):
+    authorName: str
+    authorLogin: Optional[str] = ""
+    body: str
+
+
+class RouterTimelineUpdatePatch(BaseModel):
+    authorName: Optional[str] = None
+    authorLogin: Optional[str] = None
+    body: Optional[str] = None
+
+
+@app.get("/api/router-timeline/reports")
+def router_timeline_list_reports():
+    try:
+        with db_cursor() as (_conn, cursor):
+            cursor.execute(
+                f"""
+                select
+                  r.id,
+                  r.store_code,
+                  r.category,
+                  r.description,
+                  r.reporter_name,
+                  r.reporter_login,
+                  r.reported_at,
+                  r.timeline_start,
+                  r.timeline_end,
+                  r.resolved,
+                  r.resolved_auto,
+                  r.created_at,
+                  r.updated_at,
+                  {_router_timeline_updates_subquery()}
+                from router_timeline_reports r
+                order by r.reported_at desc, r.id desc
+                """
+            )
+            rows = cursor.fetchall()
+        return {"reports": [_serialize_router_timeline_report(row) for row in rows]}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/router-timeline/reports")
+def router_timeline_create_report(payload: RouterTimelineReportCreate):
+    store_code = normalize_store_code(payload.storeCode)
+    if not store_code:
+        raise HTTPException(status_code=400, detail="storeCode is required")
+    category = _validate_router_timeline_category(payload.category)
+    description = (payload.description or "").strip()
+    if len(description) < 5:
+        raise HTTPException(status_code=400, detail="description must be at least 5 characters")
+    reporter_name = (payload.reporterName or "").strip() or "Unknown User"
+    reporter_login = (payload.reporterLogin or "").strip()
+    reported_at = parse_epoch_ms(payload.reportedAtMs) or datetime.now(timezone.utc)
+    timeline_start = parse_epoch_ms(payload.timelineStartMs)
+    timeline_end = parse_epoch_ms(payload.timelineEndMs)
+    try:
+        with db_cursor() as (conn, cursor):
+            cursor.execute(
+                """
+                insert into router_timeline_reports (
+                  store_code, category, description, reporter_name, reporter_login,
+                  reported_at, timeline_start, timeline_end, resolved, resolved_auto
+                )
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, false)
+                returning id
+                """,
+                (
+                    store_code,
+                    category,
+                    description,
+                    reporter_name,
+                    reporter_login,
+                    reported_at,
+                    timeline_start,
+                    timeline_end,
+                    bool(payload.resolved),
+                ),
+            )
+            row = cursor.fetchone()
+            report_id = row["id"]
+            created = _fetch_router_timeline_report(cursor, report_id)
+            conn.commit()
+        broadcast_event("router_timeline_changed", {"action": "create", "report_id": report_id})
+        return _serialize_router_timeline_report(created)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+def _fetch_router_timeline_report(cursor, report_id: int):
+    cursor.execute(
+        f"""
+        select
+          r.id,
+          r.store_code,
+          r.category,
+          r.description,
+          r.reporter_name,
+          r.reporter_login,
+          r.reported_at,
+          r.timeline_start,
+          r.timeline_end,
+          r.resolved,
+          r.resolved_auto,
+          r.created_at,
+          r.updated_at,
+          {_router_timeline_updates_subquery()}
+        from router_timeline_reports r
+        where r.id = %s
+        """,
+        (report_id,),
+    )
+    return cursor.fetchone()
+
+
+@app.patch("/api/router-timeline/reports/{report_id}")
+def router_timeline_update_report(report_id: int, payload: RouterTimelineReportUpdate):
+    try:
+        with db_cursor() as (conn, cursor):
+            existing = _fetch_router_timeline_report(cursor, report_id)
+            if not existing:
+                raise HTTPException(status_code=404, detail="Report not found")
+
+            store_code = normalize_store_code(payload.storeCode) if payload.storeCode is not None else existing["store_code"]
+            if not store_code:
+                raise HTTPException(status_code=400, detail="storeCode is required")
+            category = (
+                _validate_router_timeline_category(payload.category)
+                if payload.category is not None
+                else existing["category"]
+            )
+            description = (
+                (payload.description or "").strip()
+                if payload.description is not None
+                else existing["description"]
+            )
+            if len(description) < 1:
+                raise HTTPException(status_code=400, detail="description is required")
+            reporter_name = (
+                (payload.reporterName or "").strip() or existing["reporter_name"]
+                if payload.reporterName is not None
+                else existing["reporter_name"]
+            )
+            reporter_login = (
+                (payload.reporterLogin or "").strip()
+                if payload.reporterLogin is not None
+                else existing["reporter_login"]
+            )
+            reported_at = (
+                parse_epoch_ms(payload.reportedAtMs)
+                if payload.reportedAtMs is not None
+                else existing["reported_at"]
+            )
+            timeline_start = (
+                parse_epoch_ms(payload.timelineStartMs)
+                if payload.timelineStartMs is not None
+                else existing["timeline_start"]
+            )
+            timeline_end = (
+                parse_epoch_ms(payload.timelineEndMs)
+                if payload.timelineEndMs is not None
+                else existing["timeline_end"]
+            )
+            resolved = existing["resolved"] if payload.resolved is None else bool(payload.resolved)
+            resolved_auto = (
+                existing["resolved_auto"]
+                if payload.resolvedAuto is None
+                else bool(payload.resolvedAuto)
+            )
+
+            cursor.execute(
+                """
+                update router_timeline_reports
+                set store_code = %s,
+                    category = %s,
+                    description = %s,
+                    reporter_name = %s,
+                    reporter_login = %s,
+                    reported_at = %s,
+                    timeline_start = %s,
+                    timeline_end = %s,
+                    resolved = %s,
+                    resolved_auto = %s,
+                    updated_at = now()
+                where id = %s
+                """,
+                (
+                    store_code,
+                    category,
+                    description,
+                    reporter_name,
+                    reporter_login,
+                    reported_at,
+                    timeline_start,
+                    timeline_end,
+                    resolved,
+                    resolved_auto,
+                    report_id,
+                ),
+            )
+            updated = _fetch_router_timeline_report(cursor, report_id)
+            conn.commit()
+        broadcast_event("router_timeline_changed", {"action": "update", "report_id": report_id})
+        return _serialize_router_timeline_report(updated)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.patch("/api/router-timeline/reports/{report_id}/resolved")
+def router_timeline_patch_resolved(report_id: int, payload: RouterTimelineResolvedPatch):
+    try:
+        with db_cursor() as (conn, cursor):
+            cursor.execute(
+                """
+                update router_timeline_reports
+                set resolved = %s,
+                    resolved_auto = %s,
+                    updated_at = now()
+                where id = %s
+                returning id
+                """,
+                (bool(payload.resolved), bool(payload.resolvedAuto), report_id),
+            )
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Report not found")
+            updated = _fetch_router_timeline_report(cursor, report_id)
+            conn.commit()
+        broadcast_event("router_timeline_changed", {"action": "resolve", "report_id": report_id})
+        return _serialize_router_timeline_report(updated)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.delete("/api/router-timeline/reports/{report_id}")
+def router_timeline_delete_report(report_id: int):
+    try:
+        with db_cursor() as (conn, cursor):
+            cursor.execute(
+                "delete from router_timeline_reports where id = %s returning id",
+                (report_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Report not found")
+            conn.commit()
+        broadcast_event("router_timeline_changed", {"action": "delete", "report_id": report_id})
+        return {"ok": True, "id": report_id}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/api/router-timeline/reports/{report_id}/updates")
+def router_timeline_add_update(report_id: int, payload: RouterTimelineUpdateCreate):
+    body = (payload.body or "").strip()
+    if not body:
+        raise HTTPException(status_code=400, detail="body is required")
+    author_name = (payload.authorName or "").strip() or "Unknown User"
+    author_login = (payload.authorLogin or "").strip()
+    try:
+        with db_cursor() as (conn, cursor):
+            cursor.execute("select id from router_timeline_reports where id = %s", (report_id,))
+            if not cursor.fetchone():
+                raise HTTPException(status_code=404, detail="Report not found")
+            cursor.execute(
+                """
+                insert into router_timeline_report_updates (
+                  report_id, author_name, author_login, body
+                )
+                values (%s, %s, %s, %s)
+                returning id
+                """,
+                (report_id, author_name, author_login, body),
+            )
+            update_id = cursor.fetchone()["id"]
+            updated = _fetch_router_timeline_report(cursor, report_id)
+            conn.commit()
+        broadcast_event(
+            "router_timeline_changed",
+            {"action": "update_note", "report_id": report_id, "update_id": update_id},
+        )
+        return _serialize_router_timeline_report(updated)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.patch("/api/router-timeline/reports/{report_id}/updates/{update_id}")
+def router_timeline_edit_update(report_id: int, update_id: int, payload: RouterTimelineUpdatePatch):
+    body = (payload.body or "").strip() if payload.body is not None else None
+    if body is not None and not body:
+        raise HTTPException(status_code=400, detail="body is required")
+    try:
+        with db_cursor() as (conn, cursor):
+            cursor.execute(
+                """
+                select id, author_name, author_login, body
+                from router_timeline_report_updates
+                where id = %s and report_id = %s
+                """,
+                (update_id, report_id),
+            )
+            existing = cursor.fetchone()
+            if not existing:
+                raise HTTPException(status_code=404, detail="Update not found")
+            author_name = (
+                (payload.authorName or "").strip() or existing["author_name"]
+                if payload.authorName is not None
+                else existing["author_name"]
+            )
+            author_login = (
+                (payload.authorLogin or "").strip()
+                if payload.authorLogin is not None
+                else existing["author_login"]
+            )
+            new_body = body if body is not None else existing["body"]
+            cursor.execute(
+                """
+                update router_timeline_report_updates
+                set author_name = %s,
+                    author_login = %s,
+                    body = %s,
+                    updated_at = now()
+                where id = %s and report_id = %s
+                """,
+                (author_name, author_login, new_body, update_id, report_id),
+            )
+            updated = _fetch_router_timeline_report(cursor, report_id)
+            conn.commit()
+        broadcast_event(
+            "router_timeline_changed",
+            {"action": "edit_note", "report_id": report_id, "update_id": update_id},
+        )
+        return _serialize_router_timeline_report(updated)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.delete("/api/router-timeline/reports/{report_id}/updates/{update_id}")
+def router_timeline_delete_update(report_id: int, update_id: int):
+    try:
+        with db_cursor() as (conn, cursor):
+            cursor.execute(
+                """
+                delete from router_timeline_report_updates
+                where id = %s and report_id = %s
+                returning id
+                """,
+                (update_id, report_id),
+            )
+            row = cursor.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Update not found")
+            updated = _fetch_router_timeline_report(cursor, report_id)
+            conn.commit()
+        broadcast_event(
+            "router_timeline_changed",
+            {"action": "delete_note", "report_id": report_id, "update_id": update_id},
+        )
+        return _serialize_router_timeline_report(updated)
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 

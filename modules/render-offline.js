@@ -9,7 +9,7 @@
  * single helper through `deps`.
  *
  * Public API:
- *   window.GFN_RENDER_OFFLINE.buildOfflineStoreData(offlineReportData)
+ *   window.GFN_RENDER_OFFLINE.buildOfflineStoreData(offlineReportData, dataMap)
  *   window.GFN_RENDER_OFFLINE.renderOfflineTable(htmlNode, opts)
  *   window.GFN_RENDER_OFFLINE.setupOfflineTableHeaderSorting(htmlNode, opts)
  */
@@ -31,7 +31,10 @@
       formatUptimePercent: _PS.formatUptimePercent || ((v) => v == null ? '—' : `${v.toFixed(1)}%`),
       uptimePercentCellClass: _PS.uptimePercentCellClass || (() => 'time-cell'),
       lookupOntForOfflineStore: _PS.lookupOntForOfflineStore || (() => null),
+      extractStoreCode: _DF.extractStoreCode || (() => ''),
       applyInternetUptimeToOfflineRows: _PS.applyInternetUptimeToOfflineRows || (() => {}),
+      applyPowerOutageAdjustmentToOfflineRows: (window.GFN_OFFLINE_POWER_OUTAGE || {}).applyPowerOutageAdjustmentToOfflineRows || (() => {}),
+      applyInternetReportAdjustmentsToOfflineRows: (window.GFN_OFFLINE_POWER_OUTAGE || {}).applyInternetReportAdjustmentsToOfflineRows || (() => {}),
       buildRouterOntByStore: _PS.buildRouterOntByStore || (() => ({})),
       offlinePrimaryUptimeTooltip: _U.offlinePrimaryUptimeTooltip || (() => ''),
       offlinePrimaryUptimeTooltipTotal: _U.offlinePrimaryUptimeTooltipTotal || (() => ''),
@@ -48,30 +51,45 @@
     return 'time-cell';
   }
 
-  function buildOfflineStoreData(offlineReportData) {
+  function buildOfflineStoreData(offlineReportData, dataMap) {
+    const PS = window.GFN_PARSERS || {};
+    const resolveCanonical = PS.resolveCanonicalOfflineStoreLabel || null;
     const storeDataMap = {};
     const legacyNumericKeys = new Set([
       'bothDown', 'backup', 'cr1', 'cr2', 'cr3', 'nuc', 'm1', 'm2', 'pc'
     ]);
+    const emptyRow = (store) => ({
+      store,
+      bothDown: 0, backup: 0,
+      cr1: 0, cr2: 0, cr3: 0,
+      nuc: 0, m1: 0, m2: 0, pc: 0,
+      primaryDownScheduled: null,
+      backupDownScheduled: null,
+      internetDownScheduled: null
+    });
+    const applyMetric = (row, mt, value) => {
+      if (mt === 'primaryDownScheduled' || mt === 'backupDownScheduled' || mt === 'internetDownScheduled') {
+        row[mt] = value;
+      } else if (legacyNumericKeys.has(mt)) {
+        row[mt] = Math.max(row[mt] || 0, value || 0);
+      }
+    };
+
     (offlineReportData || []).forEach((item) => {
-      if (!storeDataMap[item.store]) {
-        storeDataMap[item.store] = {
-          store: item.store,
-          bothDown: 0, backup: 0,
-          cr1: 0, cr2: 0, cr3: 0,
-          nuc: 0, m1: 0, m2: 0, pc: 0,
-          primaryDownScheduled: null,
-          backupDownScheduled: null,
-          internetDownScheduled: null
-        };
+      const rawStore = item && item.store;
+      if (!rawStore) return;
+      let storeKey = String(rawStore);
+      if (resolveCanonical && dataMap) {
+        const canonical = resolveCanonical(rawStore, dataMap);
+        if (!canonical) return;
+        storeKey = canonical;
+      }
+      if (!storeDataMap[storeKey]) {
+        storeDataMap[storeKey] = emptyRow(storeKey);
       }
       const mt = item.metricType;
       if (!mt) return;
-      if (mt === 'primaryDownScheduled' || mt === 'backupDownScheduled' || mt === 'internetDownScheduled') {
-        storeDataMap[item.store][mt] = item.timeOffline;
-      } else if (legacyNumericKeys.has(mt)) {
-        storeDataMap[item.store][mt] = item.timeOffline;
-      }
+      applyMetric(storeDataMap[storeKey], mt, item.timeOffline);
     });
 
     let storeArray = Object.values(storeDataMap);
@@ -120,7 +138,7 @@
     if (timeRangeDisplay) {
       const urlParams = new URLSearchParams(window.location.search);
       const from = urlParams.get('from');
-      let timeRangeText = 'Last 6 hours';
+      let timeRangeText = 'Last 12 hours';
       if (from) {
         if (from.startsWith('now-')) {
           const timeValue = from.replace('now-', '');
@@ -142,12 +160,26 @@
     const latestGrafanaData = opts && opts.latestGrafanaData;
     const dataMap = (opts && opts.dataMap) || {};
     const effectiveRangeBoundsFn = opts && opts.getEffectiveRangeBounds;
+    const powerOutageByStore = (opts && opts.powerOutageByStore) || null;
+    const plannedByStore = (opts && opts.plannedByStore) || null;
 
-    let storeArray = buildOfflineStoreData(offlineReportData);
+    let storeArray = buildOfflineStoreData(offlineReportData, opts && opts.dataMap);
     const panelBounds = (h.getPanelTimeRangeMs && h.getPanelTimeRangeMs(latestGrafanaData))
       || (effectiveRangeBoundsFn ? effectiveRangeBoundsFn() : { fromMs: 0, toMs: 0 });
     const ontByStoreOffline = h.buildRouterOntByStore(dataMap);
     h.applyInternetUptimeToOfflineRows(storeArray, panelBounds.fromMs, panelBounds.toMs, ontByStoreOffline);
+    if (
+      (powerOutageByStore && powerOutageByStore.size > 0) ||
+      (plannedByStore && plannedByStore.size > 0)
+    ) {
+      const applyAdjustments = h.applyInternetReportAdjustmentsToOfflineRows || h.applyPowerOutageAdjustmentToOfflineRows;
+      applyAdjustments(storeArray, powerOutageByStore, plannedByStore, panelBounds.fromMs, panelBounds.toMs, h.OFFLINE_UPTIME_SCHEDULE, {
+        scheduledMinutesInRange: h.scheduledMinutesInRange,
+        extractStoreCode: h.extractStoreCode,
+        lookupOntForOfflineStore: h.lookupOntForOfflineStore,
+        ontByStore: ontByStoreOffline
+      });
+    }
 
     if (searchQuery) {
       const query = String(searchQuery).toLowerCase();
@@ -199,7 +231,7 @@
     const Srow = h.scheduledMinutesInRange
       ? h.scheduledMinutesInRange(panelBounds.fromMs, panelBounds.toMs, h.OFFLINE_UPTIME_SCHEDULE)
       : 0;
-    let sumPd = 0, sumBd = 0, sumId = 0;
+    let sumPd = 0, sumBd = 0, sumId = 0, sumIdRaw = 0, sumPo = 0, sumPl = 0;
     let nPrim = 0, nBak = 0, nInt = 0;
     storeArray.forEach((item) => {
       const ont = h.lookupOntForOfflineStore(item.store, ontByStoreOffline);
@@ -216,8 +248,19 @@
           : 0;
       }
       nInt++;
-      sumId += item.internetDownScheduled != null && Number.isFinite(item.internetDownScheduled)
+      const idRaw = item.internetDownScheduled != null && Number.isFinite(item.internetDownScheduled)
         ? Math.max(0, item.internetDownScheduled)
+        : 0;
+      sumIdRaw += idRaw;
+      const idEff = item.internetDownEffective != null && Number.isFinite(item.internetDownEffective)
+        ? Math.max(0, item.internetDownEffective)
+        : idRaw;
+      sumId += idEff;
+      sumPo += item.internetPowerOutageReportMinutes != null && Number.isFinite(item.internetPowerOutageReportMinutes)
+        ? Math.max(0, item.internetPowerOutageReportMinutes)
+        : 0;
+      sumPl += item.internetPlannedReportMinutes != null && Number.isFinite(item.internetPlannedReportMinutes)
+        ? Math.max(0, item.internetPlannedReportMinutes)
         : 0;
     });
     if (Srow > 0 && nPrim > 0) totals.primaryUptimePct  = ((nPrim * Srow - sumPd) / (nPrim * Srow)) * 100;
@@ -238,7 +281,7 @@
         <td class="${getCellClass(totals.pc)}">${h.formatTime(totals.pc)}</td>
         <td class="${h.uptimePercentCellClass(totals.primaryUptimePct)}" title="${h.escapeAttr(h.offlinePrimaryUptimeTooltipTotal(nPrim, sumPd, Srow))}">${h.formatUptimePercent(totals.primaryUptimePct)}</td>
         <td class="${h.uptimePercentCellClass(totals.backupUptimePct)}" title="${h.escapeAttr(h.offlineBackupUptimeTooltipTotal(nBak, sumBd, Srow))}">${h.formatUptimePercent(totals.backupUptimePct)}</td>
-        <td class="${h.uptimePercentCellClass(totals.internetUptimePct)}" title="${h.escapeAttr(h.offlineInternetUptimeTooltipTotal(storeArray.length, sumId, Srow))}">${h.formatUptimePercent(totals.internetUptimePct)}</td>
+        <td class="${h.uptimePercentCellClass(totals.internetUptimePct)}" title="${h.escapeAttr(h.offlineInternetUptimeTooltipTotal(storeArray.length, sumIdRaw, Srow, sumPo, sumPl))}">${h.formatUptimePercent(totals.internetUptimePct)}</td>
       </tr>
     `;
 

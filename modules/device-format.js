@@ -363,6 +363,25 @@
     return dt === 'primary-link' || dt === 'backup-link' || dn.endsWith('-INTERNET');
   }
 
+  function internetReportTagAllowsNoTicket(tag) {
+    const t = normalizeReportTag(tag);
+    const C = (typeof window !== 'undefined' && window.GFN_CONSTANTS) || {};
+    const allowed = C.INTERNET_REPORT_TAGS_NO_TICKET_REQUIRED || ['power-outage', 'planned'];
+    return allowed.includes(t);
+  }
+
+  function isTagOnlyReportedIncident(row) {
+    if (!row) return false;
+    const ticket = String(row.ticket_url || row.crm_ticket_url || '').trim();
+    if (ticket) return false;
+    const tag = normalizeReportTag(row.report_tag || row.reportTag);
+    if (!internetReportTagAllowsNoTicket(tag)) return false;
+    const dt = row.device_type || row.deviceType;
+    const dn = row.device_name || row.deviceName;
+    if (!isInternetIssueType(dt, dn)) return false;
+    return Boolean(row.reported_at || row.created_at || row.incident_reported_at);
+  }
+
   // INTERNET_REPORT_TAGS / DEVICE_REPORT_TAGS imported from GFN_CONSTANTS so
   // both modules share the canonical lists.
   function allowedTagsForDevice(deviceType, deviceName = '') {
@@ -419,6 +438,8 @@
     normalizeReportTag,
     reportTagLabel,
     isInternetIssueType,
+    internetReportTagAllowsNoTicket,
+    isTagOnlyReportedIncident,
     allowedTagsForDevice,
     csvEscape,
     naturalSortStores

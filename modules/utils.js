@@ -67,28 +67,65 @@ function formatHoursMinutesOnly(totalMinutes) {
   return m ? `${h}h ${m}m` : `${h}h`;
 }
 
-/** WAN % tooltips use the same minutes as the cell: refs X / Y / Z vs store-hours window S (see applyInternetUptimeToOfflineRows). */
+/** Internet uptime tooltip: store-hours window, Prometheus downtime (ref Z), power outage from DB reports. */
+function offlineInternetRawDowntimeMinutes(row) {
+  const raw = row?.internetDownScheduled;
+  return raw != null && Number.isFinite(raw) ? Math.max(0, Math.floor(raw)) : 0;
+}
+
+function offlineInternetPowerOutageFromDbMinutes(row) {
+  const reported = row?.internetPowerOutageReportMinutes;
+  return reported != null && Number.isFinite(reported) ? Math.max(0, Math.floor(reported)) : 0;
+}
+
+function offlineInternetPlannedFromDbMinutes(row) {
+  const reported = row?.internetPlannedReportMinutes;
+  return reported != null && Number.isFinite(reported) ? Math.max(0, Math.floor(reported)) : 0;
+}
+
+function offlineInternetUptimeTooltipLines(expectedMinutes, downtimeMinutes, powerOutageMinutes, plannedMinutes) {
+  const lines = [
+    `Expected Uptime: ${formatHoursMinutesOnly(expectedMinutes)}`,
+    `Downtime: ${formatHoursMinutesOnly(downtimeMinutes)}`,
+    `Power Outage: ${formatHoursMinutesOnly(powerOutageMinutes)}`
+  ];
+  const planned = Math.max(0, Math.floor(Number(plannedMinutes) || 0));
+  if (planned > 0) {
+    lines.push(`Planned: ${formatHoursMinutesOnly(planned)}`);
+  }
+  return lines.join('\n');
+}
+
 function offlineInternetUptimeTooltip(row, storeHoursMinutesInRange) {
   const cap = Math.max(0, Math.floor(Number(storeHoursMinutesInRange) || 0));
   if (cap <= 0) {
     return 'No store-hours in the selected time range.';
   }
-  const raw = row?.internetDownScheduled;
-  const offM = raw != null && Number.isFinite(raw) ? Math.max(0, raw) : 0;
-  return `No internet: ${formatHoursMinutesOnly(offM)} of ${formatHoursMinutesOnly(cap)} store-hours in range`;
+  return offlineInternetUptimeTooltipLines(
+    cap,
+    offlineInternetRawDowntimeMinutes(row),
+    offlineInternetPowerOutageFromDbMinutes(row),
+    offlineInternetPlannedFromDbMinutes(row)
+  );
 }
 
-function offlineInternetUptimeTooltipTotal(nStores, sumInternetDownScheduled, storeHoursMinutesInRange) {
-  const n = Math.max(0, Math.floor(Number(nStores) || 0));
+function offlineInternetUptimeTooltipTotal(
+  nStores,
+  sumRawDowntimeMinutes,
+  storeHoursMinutesInRange,
+  sumPowerOutageFromDbMinutes,
+  sumPlannedFromDbMinutes
+) {
   const cap = Math.max(0, Math.floor(Number(storeHoursMinutesInRange) || 0));
-  const sum = Math.max(0, Math.floor(Number(sumInternetDownScheduled) || 0));
   if (cap <= 0) {
     return 'No store-hours in the selected time range.';
   }
-  if (n <= 0) {
-    return `No internet (sum): ${formatHoursMinutesOnly(sum)}.`;
-  }
-  return `No internet total (${n} stores): ${formatHoursMinutesOnly(sum)} · ${formatHoursMinutesOnly(cap)} store-hours`;
+  const n = Math.max(0, Math.floor(Number(nStores) || 0));
+  const downtime = Math.max(0, Math.floor(Number(sumRawDowntimeMinutes) || 0));
+  const po = Math.max(0, Math.floor(Number(sumPowerOutageFromDbMinutes) || 0));
+  const planned = Math.max(0, Math.floor(Number(sumPlannedFromDbMinutes) || 0));
+  const body = offlineInternetUptimeTooltipLines(cap, downtime, po, planned);
+  return n > 0 ? `TOTAL (${n} stores)\n${body}` : body;
 }
 
 function offlinePrimaryUptimeTooltip(row, storeHoursMinutesInRange, ont) {

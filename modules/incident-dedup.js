@@ -255,11 +255,17 @@
   /** Same Prometheus/DB episode: tolerate small timestamp skew between unreported vs solved. */
   const LIVE_UNREPORTED_DEDUP_OFFLINE_START_ALIGN_MS = 20 * 60 * 1000;
 
+  function _isTagOnlyReportedRow(row) {
+    const fn = _DF().isTagOnlyReportedIncident;
+    return typeof fn === 'function' ? fn(row) : false;
+  }
+
   function liveReportedSolvedSupersedesUnreportedOpen(otherRow, unreportedRow) {
     const st = String((otherRow && otherRow.incident_status) || '').trim().toLowerCase();
     const uStart = _toEpochMs(unreportedRow && unreportedRow.offline_started_at);
     if (uStart == null) return false;
     if (st === 'open') return true;
+    if (_isTagOnlyReportedRow(otherRow) && (st === 'open' || !st)) return true;
     // Manual CRM rows can represent the same still-open outage even when they
     // do not have an incident_status/offline window yet. The caller has already
     // proven that store+device keys overlap, so a ticketed manual row should

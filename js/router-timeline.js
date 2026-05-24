@@ -5,7 +5,7 @@
  * that consumed a Grafana-injected `data.series` array.
  *
  *   - Prometheus data        ->  /prom/query_range  (nginx proxy to prometheus:9090)
- *   - Reports storage        ->  localStorage (per browser)
+ *   - Reports storage        ->  /incidents-api/router-timeline/reports (Postgres)
  *   - Reporter identity      ->  localStorage-backed name
  *
  * The visualization, segment building, divider math, modals, search, CSV
@@ -13,8 +13,10 @@
  * original — they were already well battle-tested.
  *
  * Exposed API:
- *   window.GFN_ROUTER_TIMELINE.init(htmlNode)   // fetch + render
- *   window.GFN_ROUTER_TIMELINE.teardown()       // close modals, cancel timers
+ *   window.GFN_ROUTER_TIMELINE.init(htmlNode)     // first load
+ *   window.GFN_ROUTER_TIMELINE.refresh(htmlNode)  // soft data refresh (no UI wipe)
+ *   window.GFN_ROUTER_TIMELINE.isMounted()        // already initialized on this page
+ *   window.GFN_ROUTER_TIMELINE.teardown()         // close modals, cancel timers
  */
 (function () {
     'use strict';
@@ -24,7 +26,6 @@
     // =====================================================================
 
     const PROM_BASE = '/prom';
-    const STORAGE_KEY_REPORTS = 'gfn_router_timeline_reports';
     const STORAGE_KEY_REPORTER = 'grafana_custom_panel_reporter_name';
     const STORAGE_KEY_REPORTER_LOGIN = 'grafana_custom_panel_reporter_login';
 
@@ -32,9 +33,15 @@
     const SYNC_MIN_INTERVAL_MS = 15000;
 
     const PROM_QUERIES = [
-        { refId: 'A', expr: 'sum(router_status4) by (store) <= 1' },
-        { refId: 'B', expr: 'sum(router_status4_projects) by (store) <= 1' }
+        // Raw router_status4 values: 0=down, 1=backup, 2=up. Do NOT use `<= 1` —
+        // that boolean filter drops most stores and mis-maps status on refresh.
+        { refId: 'A', expr: 'max by (store) (router_status4)' },
+        { refId: 'B', expr: 'max by (store) (router_status4_projects)' }
     ];
+
+    let promFetchInFlight = null;
+    let promFetchKey = '';
+    let initInFlight = null;
 
     const moduleState = {
         reportsCache: [],
@@ -45,8 +52,10 @@
         reportsSyncIntervalId: null,
         modalFocusTimeoutId: null,
         initSeq: 0,
+        refreshSeq: 0,
         boundHtmlNode: null,
         currentData: null,
+        reportsFingerprint: '',
         visibleTimeRange: null,
         reportsOnLongDown: [],
         reportsOnDownCount: 0,
@@ -171,27 +180,6 @@
         return normalized || '0';
     }
 
-    function parseCashReportDescription(description) {
-        const raw = String(description || '').trim();
-        const match = raw.match(/^cash\s+registers\s+affected\s*:\s*([1-3])(?:\s*(?:-|\u2013|\u2014|\.)\s*(.*))?$/i);
-        if (!match) return { isCash: false, registers: 1, details: raw };
-        const registers = parseInt(match[1], 10);
-        const details = String(match[2] || '').trim();
-        return {
-            isCash: true,
-            registers: Number.isFinite(registers) ? Math.min(Math.max(registers, 1), 3) : 1,
-            details: details
-        };
-    }
-
-    function buildCashReportDescription(registers, details) {
-        const safeRegisters = Number.isFinite(registers) ? Math.min(Math.max(registers, 1), 3) : 1;
-        const cleanDetails = String(details || '').trim();
-        return cleanDetails
-            ? `Cash registers affected: ${safeRegisters}. ${cleanDetails}`
-            : `Cash registers affected: ${safeRegisters}`;
-    }
-
     function getLocationNumber(value) {
         const raw = String(value || '').trim();
         if (!raw) return '';
@@ -204,6 +192,12 @@
         return normalized || '0';
     }
 
+    function requestTimeoutMs(fromMs, toMs) {
+        const spanMs = Math.max(0, Number(toMs || 0) - Number(fromMs || 0));
+        const days = spanMs / (24 * 60 * 60 * 1000);
+        return Math.min(120000, Math.max(REQUEST_TIMEOUT_MS, Math.round(20000 + days * 8000)));
+    }
+
     function fetchWithTimeout(url, options, timeoutMs) {
         timeoutMs = timeoutMs || REQUEST_TIMEOUT_MS;
         const controller = new AbortController();
@@ -211,7 +205,7 @@
         const opts = Object.assign({}, options || {}, {
             signal: controller.signal,
             cache: 'no-store',
-            credentials: 'same-origin'
+            credentials: 'include'
         });
         return fetch(url, opts).finally(() => clearTimeout(timer));
     }
@@ -323,21 +317,14 @@
 
     function pickStep(rangeSec) {
         // Match Grafana's "auto" step granularity (~range / panel-width-px).
-        // Aiming for ~2500 samples keeps brief incidents visible and lines up
-        // with the actual Prometheus scrape interval well enough that
-        // `buildSegments` doesn't fragment continuous backup periods into
-        // many small chunks.
-        //
-        // Examples (rangeSec / 2500):
-        //   6 hours -> 8.6s  -> clamped to 30s scrape interval
-        //   1 day   -> 35s
-        //   7 days  -> 242s  (~4 min, same ballpark as Grafana auto)
-        //   30 days -> 1037s (~17 min)
-        //
-        // The 30s floor matches the typical scrape cadence; sub-30s steps
-        // would just re-return the same Prometheus sample multiple times.
-        const step = Math.max(30, Math.round(rangeSec / 2500));
-        return step;
+        const auto = Math.max(30, Math.round(rangeSec / 2500));
+        const days = rangeSec / 86400;
+        // Brief backup/down events (~2 min) vanish at ~4 min steps unless the
+        // Prometheus query grid happens to align with the scrape that saw
+        // status=1 — that is why Store 75 backup looked random on hard refresh.
+        if (days <= 7) return Math.min(auto, 60);
+        if (days <= 30) return Math.min(auto, 120);
+        return Math.min(auto, 300);
     }
 
     async function promQueryRange(expr, fromMs, toMs, stepSec) {
@@ -348,7 +335,11 @@
             + `&step=${stepSec}s`;
         let res;
         try {
-            res = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } });
+            res = await fetchWithTimeout(
+                url,
+                { headers: { Accept: 'application/json' }, cache: 'no-store', credentials: 'include' },
+                requestTimeoutMs(fromMs, toMs)
+            );
         } catch (err) {
             console.warn('[RouterTimeline] Prom fetch failed:', err);
             return [];
@@ -410,104 +401,95 @@
     async function fetchPanelData() {
         const range = resolvePanelRange();
         const stepSec = pickStep((range.toMs - range.fromMs) / 1000);
-        const all = await Promise.all(
-            PROM_QUERIES.map((q) => promQueryRange(q.expr, range.fromMs, range.toMs, stepSec))
-        );
-        const series = [];
-        for (let i = 0; i < all.length; i++) {
-            const refId = PROM_QUERIES[i].refId;
-            for (const result of all[i]) series.push(buildSeriesFromMatrix(refId, result));
-        }
-        const fromDate = new Date(range.fromMs);
-        const toDate = new Date(range.toMs);
-        return {
-            series,
-            request: {
-                range: {
-                    from: fromDate, to: toDate,
-                    raw: rawRangeFromResolved(range)
-                }
+        const fetchKey = `${range.fromMs}|${range.toMs}|${stepSec}`;
+        if (promFetchInFlight && promFetchKey === fetchKey) return promFetchInFlight;
+        promFetchKey = fetchKey;
+        promFetchInFlight = (async () => {
+            const all = await Promise.all(
+                PROM_QUERIES.map((q) => promQueryRange(q.expr, range.fromMs, range.toMs, stepSec))
+            );
+            const series = [];
+            for (let i = 0; i < all.length; i++) {
+                const refId = PROM_QUERIES[i].refId;
+                for (const result of all[i]) series.push(buildSeriesFromMatrix(refId, result));
             }
-        };
-    }
-
-    // =====================================================================
-    // REPORTS STORAGE (localStorage)
-    // =====================================================================
-
-    function readReportsFromStorage() {
+            if (!series.length) {
+                console.warn('[RouterTimeline] Prometheus returned no router timeline series');
+            }
+            const fromDate = new Date(range.fromMs);
+            const toDate = new Date(range.toMs);
+            return {
+                series,
+                request: {
+                    range: {
+                        from: fromDate, to: toDate,
+                        raw: rawRangeFromResolved(range)
+                    }
+                }
+            };
+        })();
         try {
-            const raw = localStorage.getItem(STORAGE_KEY_REPORTS);
-            if (!raw) return [];
-            const parsed = JSON.parse(raw);
-            const reports = Array.isArray(parsed && parsed.reports) ? parsed.reports : (Array.isArray(parsed) ? parsed : []);
-            return reports.map(normalizeReportRecord).filter((r) => r.store && r.deviceType && r.description);
-        } catch (e) {
-            console.warn('[RouterTimeline] Could not read reports from localStorage:', e);
-            return [];
+            return await promFetchInFlight;
+        } finally {
+            if (promFetchKey === fetchKey) {
+                promFetchInFlight = null;
+                promFetchKey = '';
+            }
         }
     }
 
-    function writeReportsToStorage(reports) {
-        const storageReports = (Array.isArray(reports) ? reports : []).map((r) => ({
-            id: String((r && r.id !== undefined && r.id !== null) ? r.id : Date.now()),
-            store: String((r && r.store) || '').trim(),
-            device: String((r && (r.deviceType || r.device)) || '').trim(),
-            description: String((r && r.description) || '').trim(),
-            reporter: String((r && (r.user || r.reporter)) || '').trim() || 'Unknown User',
-            reporterLogin: String((r && (r.userLogin || r.reporterLogin || r.login || r.username)) || '').trim(),
-            timestamp: String((r && r.timestamp) || new Date().toISOString()),
-            timelineStart: String((r && r.timelineStart) || '').trim(),
-            timelineEnd: String((r && r.timelineEnd) || '').trim(),
-            resolved: !!(r && r.resolved),
-            reactions: normalizeReactions(r && r.reactions),
-            reactionLastAt: normalizeReactionLastAt(r && r.reactionLastAt),
-            comments: normalizeComments(r && r.comments)
-        }));
-        localStorage.setItem(STORAGE_KEY_REPORTS, JSON.stringify({ reports: storageReports }));
+    function reportStatusLabel(report) {
+        if (!report || !report.resolved) return 'Active';
+        return report.resolvedAuto ? 'Auto Solved' : 'Solved';
     }
 
-    function isPlainObject(value) {
-        return !!value && typeof value === 'object' && !Array.isArray(value);
+    function resolveApiBase() {
+        const api = window.GFN_API_BASE;
+        if (api && typeof api.resolveApiBase === 'function') return api.resolveApiBase();
+        const configured =
+            (typeof window !== 'undefined' && window.__CRM_TICKET_API_BASE__) ||
+            (typeof window !== 'undefined' && window.CRM_TICKET_API_BASE) ||
+            '';
+        return String(configured || '/incidents-api').replace(/\/+$/, '');
     }
 
-    function getEmptyReactions() {
-        return { thumbs_up: [], heart: [], fire: [], clap: [], surprised: [], angry: [] };
+    async function apiJson(method, path, body) {
+        const url = `${resolveApiBase()}${path}`;
+        const opts = {
+            method,
+            headers: { Accept: 'application/json' },
+            cache: 'no-store',
+            credentials: 'include'
+        };
+        if (body !== undefined) {
+            opts.headers['Content-Type'] = 'application/json';
+            opts.body = JSON.stringify(body);
+        }
+        const res = await fetchWithTimeout(url, opts);
+        if (!res.ok) {
+            let detail = '';
+            try { detail = await res.text(); } catch (_e) { /* ignore */ }
+            throw new Error(detail || `HTTP ${res.status}`);
+        }
+        if (res.status === 204) return null;
+        return res.json();
     }
 
-    function getEmptyReactionLastAt() {
-        return { thumbs_up: 0, heart: 0, fire: 0, clap: 0, surprised: 0, angry: 0 };
+    function upsertReportInCache(report) {
+        if (!report) return;
+        const idx = moduleState.reportsCache.findIndex((r) => r.id === report.id);
+        if (idx === -1) moduleState.reportsCache.unshift(report);
+        else moduleState.reportsCache[idx] = report;
+        moduleState.reportsCache.sort((a, b) => (Date.parse(b.timestamp) || 0) - (Date.parse(a.timestamp) || 0));
     }
 
-    function normalizeReactions(value) {
-        const base = getEmptyReactions();
-        if (!isPlainObject(value)) return base;
-        Object.keys(base).forEach((key) => {
-            const raw = value[key];
-            if (!Array.isArray(raw)) return;
-            const seen = Object.create(null);
-            const cleaned = [];
-            raw.forEach((u) => {
-                const name = normalizeUsername(u);
-                if (!name || seen[name]) return;
-                seen[name] = true;
-                cleaned.push(name);
-            });
-            base[key] = cleaned.slice(0, 200);
-        });
-        return base;
+    function removeReportFromCache(reportId) {
+        moduleState.reportsCache = moduleState.reportsCache.filter((r) => r.id !== reportId);
     }
 
-    function normalizeReactionLastAt(value) {
-        const base = getEmptyReactionLastAt();
-        if (!isPlainObject(value)) return base;
-        Object.keys(base).forEach((key) => {
-            const v = value[key];
-            const n = (typeof v === 'number') ? v : parseInt(v, 10);
-            base[key] = Number.isFinite(n) && n > 0 ? n : 0;
-        });
-        return base;
-    }
+    // =====================================================================
+    // REPORTS API (Postgres via gfn_api)
+    // =====================================================================
 
     function normalizeComments(value) {
         if (!Array.isArray(value)) return [];
@@ -518,10 +500,10 @@
             if (typeof c === 'string') { text = c; ts = new Date().toISOString(); }
             else if (c && typeof c === 'object') {
                 id = String(c.id || c.commentId || c._id || '').trim();
-                user = normalizeUsername(c.user || c.author || c.by || c.login || c.username || c.name || c.reporter || c.email) || 'Unknown User';
-                userLogin = normalizeUsername(c.userLogin || c.login || c.username || c.user_name || '');
+                user = normalizeUsername(c.user || c.author || c.author_name || c.by || c.login || c.username || c.name || c.reporter || c.email) || 'Unknown User';
+                userLogin = normalizeUsername(c.userLogin || c.author_login || c.login || c.username || c.user_name || '');
                 text = String(c.text || c.comment || c.message || c.body || '');
-                ts = String(c.timestamp || c.time || c.createdAt || c.created || '');
+                ts = String(c.timestamp || c.time || c.createdAt || c.created_at || c.created || '');
             } else continue;
             text = String(text || '').trim();
             if (!text) continue;
@@ -559,29 +541,32 @@
 
     function normalizeReportRecord(r) {
         const idNum = (r && r.id !== undefined && r.id !== null) ? parseInt(r.id, 10) : NaN;
+        const updates = r && (r.updates || r.comments || r.comment || r.notes);
         return {
             id: Number.isFinite(idNum) ? idNum : Date.now(),
-            store: String((r && r.store) || '').trim(),
-            deviceType: String((r && (r.deviceType || r.device)) || '').trim(),
+            store: String((r && (r.store || r.store_code)) || '').trim(),
+            deviceType: String((r && (r.deviceType || r.device || r.category)) || '').trim(),
             description: String((r && r.description) || '').trim(),
-            user: String((r && (r.user || r.reporter)) || '').trim() || 'Unknown User',
-            userLogin: String((r && (r.userLogin || r.reporterLogin || r.login || r.username)) || '').trim(),
-            timestamp: String((r && r.timestamp) || new Date().toISOString()),
-            timelineStart: String((r && (r.timelineStart || r.windowStart || r.segmentStart || r.startDate)) || '').trim(),
-            timelineEnd: String((r && (r.timelineEnd || r.windowEnd || r.segmentEnd || r.endDate)) || '').trim(),
+            user: String((r && (r.user || r.reporter || r.reporter_name)) || '').trim() || 'Unknown User',
+            userLogin: String((r && (r.userLogin || r.reporterLogin || r.reporter_login || r.login || r.username)) || '').trim(),
+            timestamp: String((r && (r.timestamp || r.reported_at)) || new Date().toISOString()),
+            timelineStart: String((r && (r.timelineStart || r.timeline_start || r.windowStart || r.segmentStart || r.startDate)) || '').trim(),
+            timelineEnd: String((r && (r.timelineEnd || r.timeline_end || r.windowEnd || r.segmentEnd || r.endDate)) || '').trim(),
             resolved: parseBool(r && (r.resolved !== undefined ? r.resolved : (r.done !== undefined ? r.done : r.isResolved))),
-            reactions: normalizeReactions(r && r.reactions),
-            reactionLastAt: normalizeReactionLastAt(r && (r.reactionLastAt || r.reactionsLastAt || r.reactionsLastUsedAt)),
-            comments: normalizeComments(r && (r.comments || r.comment || r.notes))
+            resolvedAuto: parseBool(r && (r.resolvedAuto !== undefined ? r.resolvedAuto : r.resolved_auto)),
+            comments: normalizeComments(updates)
         };
     }
 
     async function fetchReports() {
-        return readReportsFromStorage();
-    }
-
-    async function saveReports(reports) {
-        writeReportsToStorage(reports);
+        try {
+            const data = await apiJson('GET', '/router-timeline/reports');
+            const rows = Array.isArray(data && data.reports) ? data.reports : [];
+            return rows.map(normalizeReportRecord).filter((r) => r.store && r.deviceType && r.description);
+        } catch (err) {
+            console.warn('[RouterTimeline] Reports API unavailable (rebuild gfn_api + run SQL migration):', err);
+            return [];
+        }
     }
 
     async function syncReports(force) {
@@ -614,145 +599,143 @@
     }
 
     async function addReport(store, deviceType, description, userDisplayName, userLogin, resolved, timestampMs, timelineStartMs, timelineEndMs) {
-        await syncReports(false);
-        const reports = moduleState.reportsCache.slice();
         const ts = Number.isFinite(timestampMs) ? timestampMs : Date.now();
-        const hasTimelineStart = Number.isFinite(timelineStartMs);
-        const hasTimelineEnd = Number.isFinite(timelineEndMs);
-        const newReport = {
-            id: Date.now(),
-            timestamp: new Date(ts).toISOString(),
-            store: store.trim().toUpperCase(),
-            deviceType,
+        const payload = {
+            storeCode: store.trim(),
+            category: deviceType,
             description: description.trim(),
-            user: normalizeUsername(userDisplayName) || 'Unknown User',
-            userLogin: normalizeUsername(userLogin || ''),
-            timelineStart: hasTimelineStart ? new Date(timelineStartMs).toISOString() : '',
-            timelineEnd: hasTimelineEnd ? new Date(timelineEndMs).toISOString() : '',
-            resolved: !!resolved,
-            reactions: getEmptyReactions(),
-            reactionLastAt: getEmptyReactionLastAt(),
-            comments: []
+            reporterName: normalizeUsername(userDisplayName) || 'Unknown User',
+            reporterLogin: normalizeUsername(userLogin || ''),
+            reportedAtMs: ts,
+            resolved: !!resolved
         };
-        reports.unshift(newReport);
-        await saveReports(reports);
-        moduleState.reportsCache = reports;
-        return newReport;
+        if (Number.isFinite(timelineStartMs)) payload.timelineStartMs = timelineStartMs;
+        if (Number.isFinite(timelineEndMs)) payload.timelineEndMs = timelineEndMs;
+        const row = await apiJson('POST', '/router-timeline/reports', payload);
+        const report = normalizeReportRecord(row);
+        upsertReportInCache(report);
+        return report;
     }
 
     async function updateReport(reportId, updates) {
-        await syncReports(false);
-        const reports = moduleState.reportsCache.slice();
-        const idx = reports.findIndex((r) => r.id === reportId);
-        if (idx === -1) return null;
-        const current = reports[idx];
+        const current = moduleState.reportsCache.find((r) => r.id === reportId);
         const ts = Number.isFinite(updates && updates.timestampMs)
             ? updates.timestampMs
-            : Date.parse(current.timestamp) || Date.now();
-        const hasTimelineStartUpdate = updates && Object.prototype.hasOwnProperty.call(updates, 'timelineStartMs');
-        const hasTimelineEndUpdate = updates && Object.prototype.hasOwnProperty.call(updates, 'timelineEndMs');
-        const timelineStart = hasTimelineStartUpdate
-            ? (Number.isFinite(updates.timelineStartMs) ? new Date(updates.timelineStartMs).toISOString() : '')
-            : String(current.timelineStart || '');
-        const timelineEnd = hasTimelineEndUpdate
-            ? (Number.isFinite(updates.timelineEndMs) ? new Date(updates.timelineEndMs).toISOString() : '')
-            : String(current.timelineEnd || '');
-        const updated = Object.assign({}, current, {
-            store: String(updates.store || current.store || '').trim().toUpperCase(),
-            deviceType: String(updates.deviceType || current.deviceType || current.device || '').trim(),
-            description: String(updates.description || current.description || '').trim(),
-            resolved: !!(updates && updates.resolved),
-            timestamp: new Date(ts).toISOString(),
-            timelineStart,
-            timelineEnd
-        });
-        reports[idx] = updated;
-        await saveReports(reports);
-        moduleState.reportsCache = reports;
-        return updated;
+            : (current ? Date.parse(current.timestamp) : Date.now());
+        const payload = {
+            storeCode: String(updates.store || (current && current.store) || '').trim(),
+            category: String(updates.deviceType || (current && current.deviceType) || '').trim(),
+            description: String(updates.description || (current && current.description) || '').trim(),
+            reportedAtMs: ts,
+            resolved: !!(updates && updates.resolved)
+        };
+        if (updates && Object.prototype.hasOwnProperty.call(updates, 'timelineStartMs')) {
+            payload.timelineStartMs = Number.isFinite(updates.timelineStartMs) ? updates.timelineStartMs : null;
+        }
+        if (updates && Object.prototype.hasOwnProperty.call(updates, 'timelineEndMs')) {
+            payload.timelineEndMs = Number.isFinite(updates.timelineEndMs) ? updates.timelineEndMs : null;
+        }
+        const row = await apiJson('PATCH', `/router-timeline/reports/${reportId}`, payload);
+        const report = normalizeReportRecord(row);
+        upsertReportInCache(report);
+        return report;
     }
 
     async function deleteReport(reportId) {
-        await syncReports(false);
-        const reports = moduleState.reportsCache.slice();
-        const idx = reports.findIndex((r) => r.id === reportId);
-        if (idx === -1) return null;
-        const deleted = reports[idx];
-        reports.splice(idx, 1);
-        await saveReports(reports);
-        moduleState.reportsCache = reports;
-        return deleted;
+        await apiJson('DELETE', `/router-timeline/reports/${reportId}`);
+        removeReportFromCache(reportId);
+        return { id: reportId };
     }
 
-    async function updateReportResolved(reportId, resolved) {
-        await syncReports(false);
-        const reports = moduleState.reportsCache.slice();
-        const idx = reports.findIndex((r) => r.id === reportId);
-        if (idx === -1) return null;
-        reports[idx] = Object.assign({}, reports[idx], { resolved: !!resolved });
-        await saveReports(reports);
-        moduleState.reportsCache = reports;
-        return reports[idx];
+    async function updateReportResolved(reportId, resolved, resolvedAuto) {
+        const row = await apiJson('PATCH', `/router-timeline/reports/${reportId}/resolved`, {
+            resolved: !!resolved,
+            resolvedAuto: !!resolvedAuto
+        });
+        const report = normalizeReportRecord(row);
+        upsertReportInCache(report);
+        return report;
     }
 
     async function addReportComment(reportId, userDisplayName, userLogin, text) {
-        await syncReports(false);
-        const reports = moduleState.reportsCache.slice();
-        const idx = reports.findIndex((r) => r.id === reportId);
-        if (idx === -1) return null;
         const msg = String(text || '').trim();
         if (!msg) throw new Error('Empty comment');
-        const current = reports[idx];
-        const comments = normalizeComments(current.comments);
-        comments.unshift({
-            id: `${Date.now()}-${Math.random().toString().slice(2, 8)}`,
-            user: normalizeUsername(userDisplayName) || 'Unknown User',
-            userLogin: normalizeUsername(userLogin),
-            text: msg,
-            timestamp: new Date().toISOString()
+        const row = await apiJson('POST', `/router-timeline/reports/${reportId}/updates`, {
+            authorName: normalizeUsername(userDisplayName) || 'Unknown User',
+            authorLogin: normalizeUsername(userLogin || ''),
+            body: msg
         });
-        reports[idx] = Object.assign({}, current, { comments: normalizeComments(comments) });
-        await saveReports(reports);
-        moduleState.reportsCache = reports;
-        return reports[idx];
+        const report = normalizeReportRecord(row);
+        upsertReportInCache(report);
+        return report;
     }
 
     async function updateReportComment(reportId, commentId, userDisplayName, userLogin, text) {
-        await syncReports(false);
-        const reports = moduleState.reportsCache.slice();
-        const reportIdx = reports.findIndex((r) => r.id === reportId);
-        if (reportIdx === -1) return null;
         const msg = String(text || '').trim();
         if (!msg) throw new Error('Empty comment');
-        const report = reports[reportIdx];
-        const comments = normalizeComments(report.comments);
-        const idx = comments.findIndex((c) => String(c.id) === String(commentId));
-        if (idx === -1) return null;
-        comments[idx] = Object.assign({}, comments[idx], {
-            user: normalizeUsername(userDisplayName) || comments[idx].user || 'Unknown User',
-            userLogin: normalizeUsername(userLogin) || comments[idx].userLogin || '',
-            text: msg,
-            timestamp: new Date().toISOString()
+        const row = await apiJson('PATCH', `/router-timeline/reports/${reportId}/updates/${commentId}`, {
+            authorName: normalizeUsername(userDisplayName) || 'Unknown User',
+            authorLogin: normalizeUsername(userLogin || ''),
+            body: msg
         });
-        reports[reportIdx] = Object.assign({}, report, { comments: normalizeComments(comments) });
-        await saveReports(reports);
-        moduleState.reportsCache = reports;
-        return reports[reportIdx];
+        const report = normalizeReportRecord(row);
+        upsertReportInCache(report);
+        return report;
     }
 
     async function deleteReportComment(reportId, commentId) {
-        await syncReports(false);
-        const reports = moduleState.reportsCache.slice();
-        const reportIdx = reports.findIndex((r) => r.id === reportId);
-        if (reportIdx === -1) return null;
-        const report = reports[reportIdx];
-        const comments = normalizeComments(report.comments);
-        const filtered = comments.filter((c) => String(c.id) !== String(commentId));
-        if (filtered.length === comments.length) return null;
-        reports[reportIdx] = Object.assign({}, report, { comments: normalizeComments(filtered) });
-        await saveReports(reports);
-        moduleState.reportsCache = reports;
-        return reports[reportIdx];
+        const row = await apiJson('DELETE', `/router-timeline/reports/${reportId}/updates/${commentId}`);
+        const report = normalizeReportRecord(row);
+        upsertReportInCache(report);
+        return report;
+    }
+
+    function computeReportsFingerprint(reports) {
+        if (!Array.isArray(reports) || !reports.length) return '';
+        return reports.map((r) => [
+            r.id,
+            r.timestamp,
+            r.resolved ? '1' : '0',
+            r.resolvedAuto ? '1' : '0',
+            r.description,
+            r.deviceType || r.device || '',
+            countTotalComments(r.comments)
+        ].join(':')).join('|');
+    }
+
+    function applyPanelData(data) {
+        historyTimeSeriesData = [];
+        const parsedSeries = [];
+        if (data && data.series) {
+            data.series.forEach((series) => {
+                const parsed = parseHistoricalSeries(series);
+                if (parsed) parsedSeries.push(parsed);
+            });
+        }
+        historyTimeSeriesData = mergeRouterTimelineSeriesByStore(parsedSeries);
+    }
+
+    function refreshReportsIfChanged(htmlNode) {
+        const fp = computeReportsFingerprint(moduleState.reportsCache);
+        if (fp === moduleState.reportsFingerprint) return false;
+        moduleState.reportsFingerprint = fp;
+        renderIncidentReportsList(htmlNode, moduleState.currentData);
+        return true;
+    }
+
+    function ensureReportsSyncInterval(htmlNode) {
+        if (moduleState.reportsSyncIntervalId) return;
+        moduleState.reportsSyncIntervalId = setInterval(async () => {
+            if (document.visibilityState !== 'visible') return;
+            const node = moduleState.boundHtmlNode || htmlNode;
+            if (!node) return;
+            try {
+                await syncReports(false);
+                refreshReportsIfChanged(node);
+            } catch (err) {
+                console.warn('[RouterTimeline] Reports sync failed:', err);
+            }
+        }, 30000);
     }
 
     // =====================================================================
@@ -772,8 +755,10 @@
         const dataPoints = [];
         for (let i = 0; i < timeField.values.length; i++) {
             const timestamp = timeField.values.get(i);
-            const value = valueField.values.get(i);
-            if (timestamp === null || value === null) continue;
+            const rawValue = valueField.values.get(i);
+            if (timestamp === null || rawValue === null) continue;
+            const value = Number(rawValue);
+            if (!Number.isFinite(value)) continue;
             let status = 'up';
             if (value === 0) status = 'down';
             else if (value === 1) status = 'backup';
@@ -846,6 +831,23 @@
         });
 
         return out;
+    }
+
+    function incidentSegments(segments) {
+        return (segments || []).filter((s) => s.status === 'down' || s.status === 'backup');
+    }
+
+    function deviceHasVisibleActivity(device, maxTime, reportsByStore, rangeMin, rangeMax) {
+        const points = device && device.dataPoints;
+        if (!points || !points.length) return false;
+        const segments = buildSegments(points.slice().sort((a, b) => a.time - b.time), maxTime);
+        if (incidentSegments(segments).length > 0) return true;
+        const key = normalizeStoreName(device.storeKey);
+        const reps = reportsByStore.get(key) || [];
+        return reps.some((r) => {
+            const ts = Date.parse(r.timestamp);
+            return Number.isFinite(ts) && ts >= rangeMin && ts <= rangeMax;
+        });
     }
 
     function buildSegments(dataPoints, maxTime) {
@@ -1159,7 +1161,7 @@
                 for (const report of reportsToAutoSolve.values()) {
                     if (!report || report.resolved) continue;
                     try {
-                        const updated = await updateReportResolved(report.id, true);
+                        const updated = await updateReportResolved(report.id, true, true);
                         if (updated) { changed = true; autoSolvedCount += 1; }
                     } catch (err) {
                         console.error('[RouterTimeline] Auto-resolve report failed:', err);
@@ -1187,7 +1189,16 @@
         html += `<div class="timeline-bar timeline-bar-head" aria-hidden="true">${timelineDividers.linesHtml}${timelineDividers.labelsHtml}</div>`;
         html += '</div>';
 
-        historyTimeSeriesData.forEach((device) => {
+        const visibleDevices = historyTimeSeriesData.filter((device) =>
+            deviceHasVisibleActivity(device, maxTime, reportsByStore, minTime, maxTime)
+        );
+
+        if (!visibleDevices.length) {
+            wrapper.innerHTML = '<div class="timeline-loading">No incidents in the selected time range.</div>';
+            return;
+        }
+
+        visibleDevices.forEach((device) => {
             const points = device.dataPoints.slice().sort((a, b) => a.time - b.time);
             const segments = buildSegments(points, maxTime);
             const deviceReports = reportsByStore.get(normalizeStoreName(device.storeKey)) || [];
@@ -1230,10 +1241,7 @@
             html += `<div class="timeline-bar" data-store="${escapeAttr(device.storeKey)}">`;
             html += timelineDividers.linesHtml;
 
-            if (segments.length === 0) {
-                html += '<div class="timeline-segment up" style="left:0;width:100%;"></div>';
-            } else {
-                segments.forEach((segment) => {
+            incidentSegments(segments).forEach((segment) => {
                     const startPercent = ((segment.startTime - minTime) / timeRange) * 100;
                     const endPercent = ((segment.endTime - minTime) / timeRange) * 100;
                     const widthPercent = Math.max(endPercent - startPercent, 0.4);
@@ -1246,7 +1254,6 @@
                         + ` data-store="${escapeAttr(device.storeKey)}"`
                         + `></div>`;
                 });
-            }
 
             deviceReports.forEach((report) => {
                 const ts = Date.parse(report.timestamp);
@@ -1408,8 +1415,6 @@
         const resolvedInput = toastRoot.getElementById('report-resolved');
         const timeInput = toastRoot.getElementById('report-timestamp');
         const timeDisplay = toastRoot.getElementById('report-time-display');
-        const cashRegistersRow = toastRoot.getElementById('report-cash-registers-row');
-        const cashRegistersInput = toastRoot.getElementById('report-cash-registers');
         const updateNoteRow = toastRoot.getElementById('report-update-note-row');
         const updateNoteInput = toastRoot.getElementById('report-update-note');
         const title = toastRoot.getElementById('report-modal-title');
@@ -1419,21 +1424,15 @@
 
         if (report) {
             editingReportId = report.id;
-            const cashMeta = parseCashReportDescription(report.description);
             storeInput.value = String(report.store || storeKey || '').toUpperCase();
             deviceInput.value = String(report.deviceType || report.device || 'Network').trim();
-            descInput.value = cashMeta.isCash ? cashMeta.details : String(report.description || '').trim();
+            descInput.value = String(report.description || '').trim();
             storeInput.readOnly = true;
             deviceInput.disabled = false;
             descInput.readOnly = false;
             resolvedInput.checked = !!report.resolved;
             resolvedInput.disabled = false;
             timeInput.disabled = false;
-            if (cashRegistersRow) cashRegistersRow.style.display = cashMeta.isCash ? 'grid' : 'none';
-            if (cashRegistersInput && cashMeta.isCash) {
-                cashRegistersInput.value = String(cashMeta.registers || 1);
-                cashRegistersInput.disabled = false;
-            }
             const existingStart = Date.parse(report.timelineStart || '');
             const existingEnd = Date.parse(report.timelineEnd || '');
             draftTimelineStartMs = Number.isFinite(existingStart) ? existingStart : null;
@@ -1453,8 +1452,6 @@
             descInput.readOnly = false;
             resolvedInput.checked = false;
             resolvedInput.disabled = false;
-            if (cashRegistersRow) cashRegistersRow.style.display = 'none';
-            if (cashRegistersInput) { cashRegistersInput.value = '1'; cashRegistersInput.disabled = false; }
             const hasWindow = timelineWindow && Number.isFinite(timelineWindow.startTime) && Number.isFinite(timelineWindow.endTime);
             draftTimelineStartMs = hasWindow ? timelineWindow.startTime : null;
             draftTimelineEndMs = hasWindow ? timelineWindow.endTime : null;
@@ -1547,7 +1544,7 @@
         const list = toastRoot.getElementById('report-list');
         const title = toastRoot.getElementById('report-view-title');
         if (!modal || !view || !report) return;
-        const resolvedLabel = report.resolved ? 'Auto Solved' : 'Active';
+        const resolvedLabel = reportStatusLabel(report);
         const reportComments = normalizeComments(report.comments);
         const updatesCount = reportComments.length;
         const commentBoxes = reportComments.length
@@ -1708,7 +1705,7 @@
 
         list.innerHTML = sorted.map((report) => {
             const statusClass = report.resolved ? 'resolved' : 'active';
-            const statusLabel = report.resolved ? 'Auto Solved' : 'Active';
+            const statusLabel = reportStatusLabel(report);
             const timeLabel = formatTimestamp(Date.parse(report.timestamp));
             const category = report.deviceType || report.device || '';
             const reporter = report.user || report.reporter || 'Unknown User';
@@ -1840,6 +1837,7 @@
 
     function refreshAllViews(htmlNode, data) {
         renderTimeline(htmlNode, data || moduleState.currentData);
+        moduleState.reportsFingerprint = computeReportsFingerprint(moduleState.reportsCache);
         renderIncidentReportsList(htmlNode, data || moduleState.currentData);
     }
 
@@ -1862,7 +1860,7 @@
                 csvEscape(r.deviceType || r.device || '', d),
                 csvEscape(r.description, d),
                 csvEscape(r.user || r.reporter || 'Unknown User', d),
-                csvEscape(r.resolved ? 'Auto Solved' : 'Active', d),
+                csvEscape(reportStatusLabel(r), d),
                 csvEscape(startLabel, d),
                 csvEscape(endLabel, d),
                 csvEscape(durationLabel, d),
@@ -1887,12 +1885,12 @@
             if (!points.length) return;
             const maxTime = Number.isFinite(rangeTo) ? rangeTo : points[points.length - 1].time;
             const segments = buildSegments(points, maxTime);
-            segments.forEach((segment) => {
+            incidentSegments(segments).forEach((segment) => {
                 const start = segment.startTime;
                 const end = segment.endTime;
                 if (Number.isFinite(rangeFrom) && end < rangeFrom) return;
                 if (Number.isFinite(rangeTo) && start > rangeTo) return;
-                const statusLabel = segment.status === 'down' ? 'Down' : (segment.status === 'backup' ? 'Backup' : 'Up');
+                const statusLabel = segment.status === 'down' ? 'Down' : 'Backup';
                 rows.push([
                     csvEscape(device.name, ','),
                     csvEscape(statusLabel, ','),
@@ -1941,7 +1939,7 @@
         }
         list.innerHTML = filtered.map((report) => {
             const statusClass = report.resolved ? 'resolved' : 'active';
-            const statusLabel = report.resolved ? 'Auto Solved' : 'Active';
+            const statusLabel = reportStatusLabel(report);
             const updatesCount = countTotalComments(report.comments);
             const updatesLabel = updatesCount > 0 ? `Updates (${updatesCount})` : 'Updates';
             return `
@@ -2081,8 +2079,6 @@
                 const desc = descField ? String(descField.value || '').trim() : '';
                 const resolved = htmlNode.getElementById('report-resolved').checked;
                 const tsValue = parseInt(htmlNode.getElementById('report-timestamp').value, 10);
-                const cashRegistersRow = htmlNode.getElementById('report-cash-registers-row');
-                const cashRegistersInput = htmlNode.getElementById('report-cash-registers');
                 const updateNoteTextarea = htmlNode.getElementById('report-update-note');
                 const updateNote = updateNoteTextarea ? String(updateNoteTextarea.value || '').trim() : '';
 
@@ -2100,13 +2096,8 @@
 
                 try {
                     if (editingReportId) {
-                        const isCashRowVisible = !!(cashRegistersRow && cashRegistersRow.style.display !== 'none');
-                        const cashRegisters = cashRegistersInput ? parseInt(cashRegistersInput.value, 10) : 1;
-                        const finalDescription = isCashRowVisible
-                            ? buildCashReportDescription(cashRegisters, desc)
-                            : desc;
                         const updated = await updateReport(editingReportId, {
-                            store, deviceType: device, description: finalDescription,
+                            store, deviceType: device, description: desc,
                             resolved, timestampMs: tsValue,
                             timelineStartMs: draftTimelineStartMs, timelineEndMs: draftTimelineEndMs
                         });
@@ -2135,20 +2126,12 @@
         }
     }
 
-    async function initTimeline(data, htmlNode) {
+    async function initTimeline(data, htmlNode, loadToken) {
         toastRoot = htmlNode;
         moduleState.currentData = data;
         moduleState.boundHtmlNode = htmlNode;
 
-        historyTimeSeriesData = [];
-        const parsedSeries = [];
-        if (data && data.series) {
-            data.series.forEach((series) => {
-                const parsed = parseHistoricalSeries(series);
-                if (parsed) parsedSeries.push(parsed);
-            });
-        }
-        historyTimeSeriesData = mergeRouterTimelineSeriesByStore(parsedSeries);
+        applyPanelData(data);
 
         const identity = resolveIdentity();
         grafanaDisplayName = normalizeUsername(identity.displayName) || 'Operator';
@@ -2156,15 +2139,66 @@
 
         bindStaticHandlers(htmlNode, data);
 
-        await syncReports(true);
-        refreshAllViews(htmlNode, data);
+        if (loadToken !== moduleState.initSeq) return;
 
-        if (moduleState.reportsSyncIntervalId) clearInterval(moduleState.reportsSyncIntervalId);
-        moduleState.reportsSyncIntervalId = setInterval(async () => {
-            if (document.visibilityState !== 'visible') return;
-            await syncReports(false);
-            refreshAllViews(htmlNode, moduleState.currentData || data);
-        }, 30000);
+        try {
+            refreshAllViews(htmlNode, data);
+        } catch (err) {
+            console.error('[RouterTimeline] render failed:', err);
+            const w = htmlNode.getElementById('timeline-wrapper');
+            if (w) w.innerHTML = '<div class="timeline-loading">Could not render timeline. Check console.</div>';
+        }
+
+        if (loadToken !== moduleState.initSeq) return;
+
+        syncReports(true).then(() => {
+            if (loadToken !== moduleState.initSeq) return;
+            refreshAllViews(htmlNode, data);
+        }).catch((err) => {
+            console.warn('[RouterTimeline] Could not sync reports:', err);
+            moduleState.reportsCache = [];
+        });
+
+        ensureReportsSyncInterval(htmlNode);
+    }
+
+    async function refresh(htmlNode) {
+        const target = htmlNode || moduleState.boundHtmlNode;
+        if (!target) return;
+        if (!target.__rtHandlersBound) {
+            return init(target);
+        }
+
+        const token = ++moduleState.refreshSeq;
+        moduleState.boundHtmlNode = target;
+        toastRoot = target;
+
+        try {
+            const data = await fetchPanelData();
+            if (token !== moduleState.refreshSeq) return;
+
+            applyPanelData(data);
+            moduleState.currentData = data;
+            refreshAllViews(target, data);
+
+            try {
+                await syncReports(false);
+            } catch (err) {
+                console.warn('[RouterTimeline] Could not sync reports:', err);
+            }
+            if (token !== moduleState.refreshSeq) return;
+            refreshReportsIfChanged(target);
+        } catch (err) {
+            if (token !== moduleState.refreshSeq) return;
+            console.warn('[RouterTimeline] refresh failed (keeping last good data):', err);
+            if (moduleState.currentData && historyTimeSeriesData.length) {
+                refreshAllViews(target, moduleState.currentData);
+            }
+        }
+    }
+
+    function isMounted() {
+        return !!(moduleState.boundHtmlNode && moduleState.boundHtmlNode.__rtHandlersBound);
     }
 
     // =====================================================================
@@ -2173,24 +2207,53 @@
 
     async function init(htmlNode) {
         const target = htmlNode || document;
-        const mySeq = ++moduleState.initSeq;
+        if (isMounted() && moduleState.boundHtmlNode === target) {
+            return refresh(target);
+        }
+        if (initInFlight) {
+            return initInFlight;
+        }
+
+        const loadToken = ++moduleState.initSeq;
+        moduleState.refreshSeq++;
         cleanupRuntimeTimers();
+
+        const wrapper = target.getElementById('timeline-wrapper');
+        if (wrapper) {
+            wrapper.innerHTML = '<div class="timeline-loading">Loading timeline…</div>';
+        }
+
+        const flight = (async () => {
+            try {
+                const data = await fetchPanelData();
+                if (loadToken !== moduleState.initSeq) return;
+                await initTimeline(data, target, loadToken);
+            } catch (err) {
+                if (loadToken !== moduleState.initSeq) return;
+                console.warn('[RouterTimeline] init failed:', err);
+                if (wrapper) {
+                    wrapper.innerHTML = '<div class="timeline-loading">Could not load timeline data (Prometheus /prom). Check console.</div>';
+                }
+            }
+        })();
+        initInFlight = flight;
+
         try {
-            const data = await fetchPanelData();
-            if (mySeq !== moduleState.initSeq) return;
-            await initTimeline(data, target);
-        } catch (err) {
-            console.warn('[RouterTimeline] init failed:', err);
-            const wrapper = target.getElementById('timeline-wrapper');
-            if (wrapper) wrapper.innerHTML = '<div class="timeline-loading">Could not load timeline data.</div>';
+            return await flight;
+        } finally {
+            if (initInFlight === flight) initInFlight = null;
         }
     }
 
     function teardown() {
+        const node = moduleState.boundHtmlNode;
         cleanupRuntimeTimers();
+        if (node) node.__rtHandlersBound = false;
         moduleState.boundHtmlNode = null;
         moduleState.currentData = null;
+        moduleState.reportsFingerprint = '';
         moduleState.initSeq++;
+        moduleState.refreshSeq++;
         // Close any modals that might be open across navigation.
         const modalIds = ['report-modal', 'report-view-modal', 'top-users-modal', 'edit-update-modal', 'confirm-modal'];
         modalIds.forEach((id) => {
@@ -2202,5 +2265,24 @@
         });
     }
 
-    window.GFN_ROUTER_TIMELINE = { init, teardown };
+    function tryBootFromDom() {
+        try {
+            if (document.documentElement.getAttribute('data-gfn-page') !== 'router-timeline') return;
+            const wrapper = document.getElementById('timeline-wrapper');
+            if (!wrapper || isMounted()) return;
+            const loadingEl = wrapper.querySelector('.timeline-loading');
+            if (!loadingEl) return;
+            init(document);
+        } catch (err) {
+            console.warn('[RouterTimeline] boot fallback failed:', err);
+        }
+    }
+
+    window.GFN_ROUTER_TIMELINE = { init, refresh, isMounted, teardown };
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', tryBootFromDom, { once: true });
+    } else {
+        tryBootFromDom();
+    }
 })();

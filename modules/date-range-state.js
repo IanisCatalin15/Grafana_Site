@@ -12,7 +12,7 @@
   const _C = window.GFN_CONSTANTS || {};
   const STORAGE_KEY_SAVED_DATE_FILTER =
     _C.STORAGE_KEY_SAVED_DATE_FILTER || 'grafana_custom_panel_saved_date_filter';
-  const DEFAULT_LIVE_DATE_FROM = _C.DEFAULT_LIVE_DATE_FROM || 'now-6h';
+  const DEFAULT_LIVE_DATE_FROM = _C.DEFAULT_LIVE_DATE_FROM || 'now-12h';
   const DEFAULT_LIVE_DATE_TO = _C.DEFAULT_LIVE_DATE_TO || 'now';
   const LIVE_UNREPORTED_DEVICE_TYPE = _C.LIVE_UNREPORTED_DEVICE_TYPE || 'unreported';
 

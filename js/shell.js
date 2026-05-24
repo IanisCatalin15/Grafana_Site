@@ -23,7 +23,7 @@
 
   const NAV = [
     { group: 'Dashboard', items: ['live', 'offline-time', 'incidents', 'router-timeline', 'reporting'] },
-    { group: 'Devices', items: ['switches', 'admin-pc', 'cash-registers', 'music', 'price-checkers'] }
+    { group: 'Devices', items: ['switches', 'cash-registers', 'music', 'admin-pc', 'price-checkers'] }
   ];
 
   let shellReady = false;
@@ -126,7 +126,7 @@
     if (band) {
       const vs = readViewState();
       const show = vs.page === 'live' && vs.device === 'routers' && !vs.offline;
-      band.style.display = show ? '' : 'none';
+      if (!show) band.style.display = 'none';
     }
   }
 
@@ -138,7 +138,19 @@
 
     let html = `
       <div class="app-sidebar__brand">
-        <div class="app-sidebar__logo" aria-hidden="true"></div>
+        <div class="app-sidebar__logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="gfn-aurora-logo-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#34d399"/>
+                <stop offset="55%" stop-color="#818cf8"/>
+                <stop offset="100%" stop-color="#c084fc"/>
+              </linearGradient>
+            </defs>
+            <path d="M2 15.5C6.5 9.5 10.5 13.5 14.5 10.5C17 8.5 19.5 9 22 11" stroke="url(#gfn-aurora-logo-grad)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M2 18.5C7 12.5 11 16 15 13.5C17.5 11.5 20 12 22 14" stroke="url(#gfn-aurora-logo-grad)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" opacity="0.55"/>
+          </svg>
+        </div>
         <div class="app-sidebar__brand-text">
           <div class="app-sidebar__title">Aurora</div>
         </div>
@@ -162,7 +174,7 @@
     html += `
       <div class="app-sidebar__footer">
         <button type="button" class="app-sidebar__collapse" id="app-sidebar-collapse" aria-label="Collapse sidebar" title="Collapse sidebar">
-          <i class="fa-solid fa-fw fa-angles-right" aria-hidden="true"></i>
+          <i class="fa-solid fa-fw fa-angles-left" aria-hidden="true"></i>
           <span class="app-sidebar__collapse-label">Collapse</span>
         </button>
       </div>`;
@@ -185,7 +197,25 @@
   }
 
   function isCollapsed() {
-    return localStorage.getItem(STORAGE_COLLAPSED) === '1';
+    const v = localStorage.getItem(STORAGE_COLLAPSED);
+    if (v === null) return true;
+    return v === '1';
+  }
+
+  function syncTopbarStatus(routeId, routeTitle) {
+    const status = $('app-topbar-status');
+    const dot = $('app-topbar-status-dot');
+    const label = $('app-topbar-title');
+    if (!status || !label) return;
+
+    const liveRoutes = ['live', 'offline-time', 'incidents'];
+    const isLiveContext = liveRoutes.indexOf(routeId) >= 0;
+    status.classList.toggle('is-live', isLiveContext);
+    status.classList.toggle('is-idle', !isLiveContext);
+    if (dot) {
+      dot.setAttribute('aria-label', isLiveContext ? 'Live' : 'View active');
+    }
+    label.textContent = routeTitle || 'Live';
   }
 
   function applyCollapsedState() {
@@ -222,15 +252,22 @@
       <button type="button" class="app-topbar__menu" id="app-topbar-menu" aria-label="Open menu">
         <i class="fa-solid fa-bars" aria-hidden="true"></i>
       </button>
-      <h1 class="app-topbar__title" id="app-topbar-title">Live</h1>
+      <div class="app-topbar__lead">
+        <div class="app-topbar__status" id="app-topbar-status">
+          <span class="app-topbar__status-dot" id="app-topbar-status-dot" aria-hidden="true"></span>
+          <span class="app-topbar__status-label" id="app-topbar-title">Live</span>
+        </div>
+      </div>
       <div class="app-topbar__actions" id="app-topbar-actions">
         <div id="app-topbar-time-slot"></div>
         <button type="button" class="app-topbar__auto" id="app-topbar-auto"
           title="Click to refresh now (auto-refreshes every 30s)"
           aria-label="Refresh now (auto-refreshes every 30 seconds)"
-          aria-live="polite">
-          <i class="fa-solid fa-rotate" aria-hidden="true"></i>
+          aria-live="polite"
+          aria-haspopup="true">
+          <i class="fa-solid fa-arrows-rotate app-topbar__auto-icon" aria-hidden="true"></i>
           <span class="app-topbar__auto-label">Auto</span>
+          <i class="fa-solid fa-chevron-down app-topbar__auto-chevron" aria-hidden="true"></i>
         </button>
       </div>`;
     topbar.dataset.built = '1';
@@ -320,7 +357,7 @@
       syncPanelControlsQuiet(state);
 
       const title = $('app-topbar-title');
-      if (title) title.textContent = route.title;
+      if (title) syncTopbarStatus(routeId, route.title);
 
       document.querySelectorAll('.app-sidebar__item').forEach(function (el) {
         el.classList.toggle('is-active', el.dataset.route === routeId);
@@ -377,14 +414,15 @@
     });
 
     const title = $('app-topbar-title');
-    if (title) title.textContent = route.title;
+    if (title) syncTopbarStatus(routeId, route.title);
 
     syncTimeRangeButtons();
 
     const band = $('shell-overview-band');
     if (band) {
-      const show = routeId === 'live';
-      band.style.display = show ? '' : 'none';
+      const vs = readViewState();
+      const show = vs.page === 'live' && vs.device === 'routers' && !vs.offline;
+      if (!show) band.style.display = 'none';
     }
   }
 

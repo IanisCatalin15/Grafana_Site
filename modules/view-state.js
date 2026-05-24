@@ -63,6 +63,19 @@
   let viewVersion = 0;
   const subscribers = [];
 
+  function syncHtmlAttributes(nextState) {
+    try {
+      const page = normalizePage(nextState.page);
+      document.documentElement.setAttribute('data-gfn-page', page);
+      document.documentElement.setAttribute('data-gfn-device', normalizeDevice(nextState.device));
+      document.documentElement.setAttribute('data-gfn-offline', nextState.offline ? 'true' : 'false');
+    } catch (_e) { /* ignore */ }
+  }
+
+  function syncHtmlPageAttribute(page) {
+    syncHtmlAttributes({ page, device: state.device, offline: state.offline });
+  }
+
   function notify() {
     const snapshot = getState();
     subscribers.forEach((fn) => {
@@ -108,6 +121,7 @@
 
     state = next;
     if (persist) persistState(state);
+    syncHtmlAttributes(state);
     if (bumpVersion) viewVersion += 1;
     if (!silent) notify();
     return true;
@@ -130,8 +144,12 @@
     subscribe,
     normalizeDevice,
     normalizePage,
+    syncHtmlAttributes,
+    syncHtmlPageAttribute,
     STORAGE_KEY_PAGE,
     STORAGE_KEY_DEVICE,
     STORAGE_KEY_OFFLINE
   };
+
+  syncHtmlAttributes(state);
 })();

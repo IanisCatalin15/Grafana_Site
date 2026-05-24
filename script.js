@@ -119,6 +119,8 @@
                 const normalizeReportTag = _DF.normalizeReportTag;
                 const reportTagLabel = _DF.reportTagLabel;
                 const isInternetIssueType = _DF.isInternetIssueType;
+                const internetReportTagAllowsNoTicket = _DF.internetReportTagAllowsNoTicket;
+                const isTagOnlyReportedIncident = _DF.isTagOnlyReportedIncident;
                 const allowedTagsForDevice = _DF.allowedTagsForDevice;
                 const csvEscape = _DF.csvEscape;
                 const naturalSortStores = _DF.naturalSortStores;
@@ -139,6 +141,11 @@
                 const compactOntLookupKey = _PS.compactOntLookupKey;
                 const lookupOntForOfflineStore = _PS.lookupOntForOfflineStore;
                 const applyInternetUptimeToOfflineRows = _PS.applyInternetUptimeToOfflineRows;
+                const _OPO = window.GFN_OFFLINE_POWER_OUTAGE || {};
+                const buildPowerOutageMinutesByStore = _OPO.buildPowerOutageMinutesByStore || (() => new Map());
+                const buildPlannedMinutesByStore = _OPO.buildPlannedMinutesByStore || (() => new Map());
+                const applyPowerOutageAdjustmentToOfflineRows = _OPO.applyPowerOutageAdjustmentToOfflineRows || (() => {});
+                const applyInternetReportAdjustmentsToOfflineRows = _OPO.applyInternetReportAdjustmentsToOfflineRows || applyPowerOutageAdjustmentToOfflineRows;
                 // dataMap-bound wrappers: declared as arrows so `dataMap` is resolved at
                 // call time (after the closure body initializes the `const dataMap` below).
                 const buildRouterOntByStore = () => _PS.buildRouterOntByStore(dataMap);
@@ -188,6 +195,8 @@
                     _ID.livePreparedReportedSolvedSupersessions(liveReportedRowsCache, liveSolvedRowsCache);
                 const liveUnreportedSupersedesReportedOrSolved = (unreportedRow, prepared) =>
                     _ID.liveUnreportedSupersedesReportedOrSolved(unreportedRow, prepared, getDeviceTicketLink);
+
+                const _LIF = window.GFN_LIVE_INCIDENT_FILTERS || {};
 
                 const _DR = window.GFN_DATE_RANGE || {};
                 const viewStateApi = () => window.GFN_VIEW_STATE || null;
@@ -277,6 +286,72 @@
                 /** Last server totals for Live Unreported meta bar (survives grid re-render without refetch). */
                 let liveUnreportedLastMeta = { total: null, sqlLoaded: 0, hasMore: false };
 
+                /** Per-list column filters on Live Incidents (Unreported / Reported / Solved). */
+                let liveIncidentSectionFilters = _LIF.getOrLoadAllSectionFilters
+                    ? _LIF.getOrLoadAllSectionFilters()
+                    : {
+                        unreported: _LIF.createSectionState ? _LIF.createSectionState() : {},
+                        reported: _LIF.createSectionState ? _LIF.createSectionState() : {},
+                        solved: _LIF.createSectionState ? _LIF.createSectionState() : {}
+                    };
+
+                function persistLiveIncidentSectionFilters() {
+                    if (_LIF.persistAllSectionFilters) {
+                        _LIF.persistAllSectionFilters(liveIncidentSectionFilters);
+                    }
+                }
+                let liveIncidentSectionFiltersBoundRoot = null;
+                let liveIncidentSectionFiltersPanelRoot = null;
+                let liveIncidentSectionFiltersHandler = null;
+                let liveIncidentTicketFilterTimer = null;
+                /** While typing in Ticket filter: restore focus after debounced re-render. */
+                let liveIncidentTicketFilterFocus = null;
+
+                function clearLiveIncidentTicketFilterTypingState() {
+                    if (liveIncidentTicketFilterTimer) {
+                        clearTimeout(liveIncidentTicketFilterTimer);
+                        liveIncidentTicketFilterTimer = null;
+                    }
+                    liveIncidentTicketFilterFocus = null;
+                }
+
+                function restoreLiveIncidentTicketFilterFocus(root) {
+                    const snap = liveIncidentTicketFilterFocus;
+                    if (!snap || !root) return;
+                    const input = root.querySelector(`.live-inc-ticket-input[data-section="${snap.sectionId}"]`);
+                    if (!input) return;
+                    const wrap = input.closest('.incident-col-ticket-wrap');
+                    const btn = wrap && wrap.querySelector('.live-inc-ticket-btn');
+                    if (btn) btn.classList.add('is-hidden');
+                    input.hidden = false;
+                    if (wrap) wrap.classList.add('is-active');
+                    input.focus({ preventScroll: true });
+                    const len = String(input.value || '').length;
+                    const start = Number.isFinite(snap.selectionStart) ? snap.selectionStart : len;
+                    const end = Number.isFinite(snap.selectionEnd) ? snap.selectionEnd : len;
+                    try {
+                        input.setSelectionRange(start, end);
+                    } catch (_e) {
+                        /* ignore */
+                    }
+                }
+
+                function scheduleLiveIncidentTicketFilterRerender(root, sectionId, input) {
+                    if (input) {
+                        liveIncidentTicketFilterFocus = {
+                            sectionId,
+                            selectionStart: input.selectionStart,
+                            selectionEnd: input.selectionEnd
+                        };
+                    }
+                    if (liveIncidentTicketFilterTimer) clearTimeout(liveIncidentTicketFilterTimer);
+                    liveIncidentTicketFilterTimer = setTimeout(() => {
+                        liveIncidentTicketFilterTimer = null;
+                        rerenderLiveIncidentCardsFromSectionFilter(root);
+                        restoreLiveIncidentTicketFilterFocus(root);
+                    }, 400);
+                }
+
                 /** Per store: previous full-WAN blackout flag (edge detect). */
                 let prevIsStoreFullWanBlackoutByCode = {};
                 /** Per store: epoch ms until which peripheral offline is excluded from Offline Devices summary (post-recovery). */
@@ -303,6 +378,11 @@
                 };
 
                 let offlineReportData = [];
+                /** Per store (AR####): minutes credited to power-outage / planned Internet Down reports in range. */
+                let offlinePowerOutageByStore = new Map();
+                let offlinePlannedByStore = new Map();
+                let offlineInternetReportRangeKey = '';
+                let offlineInternetReportFetchToken = 0;
                 let pcOver15DetailsByStore = {};
                 let latestGrafanaData = null;
 
@@ -715,6 +795,225 @@
                     incidentSectionToggleHandler = incidentSectionToggleOnClick;
                     incidentSectionToggleAttachedRoot = htmlNode;
                     htmlNode.addEventListener('click', incidentSectionToggleHandler);
+                }
+
+                function liveIncidentStoreSortKey(row) {
+                    const code = extractStoreCode(row?.store_code || row?.device_name || '');
+                    const m = /^AR(\d+)$/i.exec(code);
+                    return m ? Number(m[1]) : 0;
+                }
+
+                function liveIncidentUnreportedStartMs(row) {
+                    return toEpochMs(row?.offline_started_at) || 0;
+                }
+
+                function liveIncidentUnreportedEndMs(row) {
+                    if (String(row?.incident_status || '').toLowerCase() === 'open') return Number.MAX_SAFE_INTEGER;
+                    return toEpochMs(row?.offline_ended_at) || 0;
+                }
+
+                function liveIncidentReportedStartMs(row) {
+                    const isManual = isManualReportedRow(row);
+                    const iso = row?.incident_offline_started_at || (isManual ? (row?.created_at || '') : '');
+                    return toEpochMs(iso) || 0;
+                }
+
+                function liveIncidentReportedEndMs(row) {
+                    if (row?.__heldFromSolved) return Number.MAX_SAFE_INTEGER;
+                    const rtr = row?.report_to_resolve_minutes != null ? Number(row.report_to_resolve_minutes) : null;
+                    const reportMs = toEpochMs(row?.created_at);
+                    if (rtr != null && Number.isFinite(rtr) && rtr >= 0 && reportMs != null) {
+                        return reportMs + (rtr * 60000);
+                    }
+                    if (String(row?.incident_status || '').toLowerCase() !== 'closed') return Number.MAX_SAFE_INTEGER;
+                    return toEpochMs(row?.offline_ended_at) || 0;
+                }
+
+                function liveIncidentReportedDurationMinutes(row) {
+                    const start = liveIncidentReportedStartMs(row);
+                    if (!start) return 0;
+                    const end = liveIncidentReportedEndMs(row);
+                    if (end >= Number.MAX_SAFE_INTEGER) {
+                        return Math.max(0, Math.floor((Date.now() - start) / 60000));
+                    }
+                    return Math.max(0, Math.floor((end - start) / 60000));
+                }
+
+                function liveIncidentReportedSolvedAtMs(row) {
+                    const end = liveIncidentReportedEndMs(row);
+                    return end >= Number.MAX_SAFE_INTEGER ? 0 : end;
+                }
+
+                function liveIncidentFilterDeps() {
+                    return {
+                        groupIdForRow: liveUnreportedGroupIdForRow,
+                        ownerKey: (r) => normalizeOwnerUsername(r?.owner_name || r?._ticket_owner || '', '-'),
+                        ownerLabel: (k) => ownerDisplayName(k, '-'),
+                        tagKey: (r) => rowReportTagId(r) || '',
+                        tagLabel: (k) => (k ? reportTagLabel(k, k) : '—'),
+                        isManualRow: (r) => isManualReportedRow(r),
+                        ticketIdFromRow: (r) => {
+                            const fromUrl = extractCrmTaskIdFromTicketUrl(String(r?.ticket_url || r?._ticket_url || '').trim());
+                            if (fromUrl) return fromUrl;
+                            const raw = r?.crm_task_id != null ? String(r.crm_task_id) : '';
+                            return raw.replace(/\D/g, '');
+                        },
+                        storeSortKey: liveIncidentStoreSortKey,
+                        startSortKey: (r, kind) => (
+                            kind === 'unreported' ? liveIncidentUnreportedStartMs(r) : liveIncidentReportedStartMs(r)
+                        ),
+                        endSortKey: (r, kind) => (
+                            kind === 'unreported' ? liveIncidentUnreportedEndMs(r) : liveIncidentReportedEndMs(r)
+                        ),
+                        durationSortKey: (r, kind) => (
+                            kind === 'unreported'
+                                ? unreportedEffectiveDurationMinutes(r)
+                                : liveIncidentReportedDurationMinutes(r)
+                        ),
+                        reportedSortKey: (r) => toEpochMs(r?.created_at) || 0,
+                        solvedSortKey: (r) => liveIncidentReportedSolvedAtMs(r)
+                    };
+                }
+
+                function rerenderLiveIncidentCardsFromSectionFilter(_htmlNode) {
+                    const renderRoot = liveIncidentSectionFiltersPanelRoot
+                        || (_htmlNode && _htmlNode.id === 'stores-grid'
+                            ? (_htmlNode.ownerDocument || document)
+                            : _htmlNode);
+                    if (!renderRoot) return;
+                    const grid = renderRoot.id === 'stores-grid'
+                        ? renderRoot
+                        : renderRoot.getElementById('stores-grid');
+                    if (grid) delete grid.dataset.fingerprint;
+                    renderUnreportedLiveCards(
+                        renderRoot,
+                        liveUnreportedRowsCache,
+                        liveReportedRowsCache,
+                        liveSolvedRowsCache
+                    );
+                }
+
+                function liveIncidentSectionFilterOnBlur(ev) {
+                    const root = liveIncidentSectionFiltersBoundRoot;
+                    if (!root) return;
+                    const target = ev.target;
+                    if (!target || !target.classList || !target.classList.contains('live-inc-ticket-input')) return;
+                    if (!root.contains(target)) return;
+                    clearLiveIncidentTicketFilterTypingState();
+                    rerenderLiveIncidentCardsFromSectionFilter(root);
+                }
+
+                function liveIncidentSectionFilterOnClick(ev) {
+                    const root = liveIncidentSectionFiltersBoundRoot;
+                    if (!root) return;
+                    const checklist = ev.target.closest('.analytics-filter-checklist');
+                    if (checklist && root.contains(checklist)) {
+                        ev.stopPropagation();
+                    }
+                    const sortBtn = ev.target.closest('.live-inc-sort-btn');
+                    if (sortBtn && root.contains(sortBtn)) {
+                        ev.preventDefault();
+                        const sectionId = sortBtn.getAttribute('data-section');
+                        const sortKey = sortBtn.getAttribute('data-sort-key');
+                        if (!sectionId || !sortKey || !liveIncidentSectionFilters[sectionId]) return;
+                        const state = liveIncidentSectionFilters[sectionId];
+                        const cur = state[`${sortKey}Order`] || '';
+                        const next = _LIF.cycleSort ? _LIF.cycleSort(cur) : '';
+                        state[`${sortKey}Order`] = next;
+                        persistLiveIncidentSectionFilters();
+                        clearLiveIncidentTicketFilterTypingState();
+                        const sym = sortBtn.querySelector('.analytics-th-sort-symbol');
+                        if (sym && _LIF.sortSymbol) sym.textContent = _LIF.sortSymbol(next);
+                        rerenderLiveIncidentCardsFromSectionFilter(root);
+                        return;
+                    }
+                    const typeBtn = ev.target.closest('.live-inc-type-btn');
+                    if (typeBtn && root.contains(typeBtn)) {
+                        ev.preventDefault();
+                        const sectionId = typeBtn.getAttribute('data-section');
+                        if (!sectionId || !liveIncidentSectionFilters[sectionId]) return;
+                        const state = liveIncidentSectionFilters[sectionId];
+                        const next = _LIF.cycleTypeFilter ? _LIF.cycleTypeFilter(state.typeFilter) : 'all';
+                        state.typeFilter = next;
+                        persistLiveIncidentSectionFilters();
+                        clearLiveIncidentTicketFilterTypingState();
+                        const sym = typeBtn.querySelector('.analytics-th-sort-symbol');
+                        if (sym && _LIF.typeFilterSymbol) sym.textContent = _LIF.typeFilterSymbol(next);
+                        rerenderLiveIncidentCardsFromSectionFilter(root);
+                        return;
+                    }
+                    const ticketBtn = ev.target.closest('.live-inc-ticket-btn');
+                    if (ticketBtn && root.contains(ticketBtn)) {
+                        ev.preventDefault();
+                        const sectionId = ticketBtn.getAttribute('data-section');
+                        const wrap = ticketBtn.closest('.incident-col-ticket-wrap');
+                        const input = wrap && wrap.querySelector('.live-inc-ticket-input');
+                        if (!input) return;
+                        ticketBtn.classList.add('is-hidden');
+                        input.hidden = false;
+                        wrap.classList.add('is-active');
+                        input.focus();
+                        return;
+                    }
+                }
+
+                function liveIncidentSectionFilterOnChange(ev) {
+                    const root = liveIncidentSectionFiltersBoundRoot;
+                    if (!root) return;
+                    const target = ev.target;
+                    if (!target || !target.getAttribute) return;
+                    const sectionId = target.getAttribute('data-section');
+                    if (!sectionId || !liveIncidentSectionFilters[sectionId]) return;
+                    if (
+                        target.classList.contains('live-inc-dev-all') ||
+                        target.classList.contains('live-inc-dev-cb') ||
+                        target.classList.contains('live-inc-owner-all') ||
+                        target.classList.contains('live-inc-owner-cb') ||
+                        target.classList.contains('live-inc-tag-all') ||
+                        target.classList.contains('live-inc-tag-cb')
+                    ) {
+                        liveIncidentSectionFilters[sectionId] = _LIF.updateStateFromCheckboxChange(
+                            sectionId,
+                            liveIncidentSectionFilters[sectionId],
+                            target
+                        );
+                        persistLiveIncidentSectionFilters();
+                        clearLiveIncidentTicketFilterTypingState();
+                        rerenderLiveIncidentCardsFromSectionFilter(root);
+                        return;
+                    }
+                    if (target.classList.contains('live-inc-ticket-input')) {
+                        const digits = String(target.value || '').replace(/\D/g, '');
+                        if (target.value !== digits) target.value = digits;
+                        liveIncidentSectionFilters[sectionId].ticketQuery = digits;
+                        persistLiveIncidentSectionFilters();
+                        scheduleLiveIncidentTicketFilterRerender(root, sectionId, target);
+                    }
+                }
+
+                function ensureLiveIncidentSectionFiltersDelegation(htmlNode) {
+                    if (!htmlNode || !_LIF.buildSectionHeader) return;
+                    const panelRoot = htmlNode.ownerDocument || document;
+                    if (
+                        liveIncidentSectionFiltersBoundRoot === htmlNode
+                        && liveIncidentSectionFiltersPanelRoot === panelRoot
+                        && liveIncidentSectionFiltersHandler
+                    ) {
+                        return;
+                    }
+                    if (liveIncidentSectionFiltersBoundRoot && liveIncidentSectionFiltersHandler) {
+                        liveIncidentSectionFiltersBoundRoot.removeEventListener('click', liveIncidentSectionFiltersHandler);
+                        liveIncidentSectionFiltersBoundRoot.removeEventListener('change', liveIncidentSectionFilterOnChange);
+                        liveIncidentSectionFiltersBoundRoot.removeEventListener('input', liveIncidentSectionFilterOnChange);
+                        liveIncidentSectionFiltersBoundRoot.removeEventListener('blur', liveIncidentSectionFilterOnBlur, true);
+                    }
+                    liveIncidentSectionFiltersHandler = liveIncidentSectionFilterOnClick;
+                    liveIncidentSectionFiltersBoundRoot = htmlNode;
+                    liveIncidentSectionFiltersPanelRoot = panelRoot;
+                    htmlNode.addEventListener('click', liveIncidentSectionFiltersHandler);
+                    htmlNode.addEventListener('change', liveIncidentSectionFilterOnChange);
+                    htmlNode.addEventListener('input', liveIncidentSectionFilterOnChange);
+                    htmlNode.addEventListener('blur', liveIncidentSectionFilterOnBlur, true);
                 }
 
                 function liveUnreportedApplyHiddenToDeviceCheckboxes(wrap, present) {
@@ -3185,6 +3484,25 @@
                     const bounds = getPanelTimeRangeMs(latestGrafanaData) || getEffectiveRangeBounds();
                     const ontByStoreCsv = buildRouterOntByStore();
                     applyInternetUptimeToOfflineRows(sortedData, bounds.fromMs, bounds.toMs, ontByStoreCsv);
+                    if (
+                        (offlinePowerOutageByStore && offlinePowerOutageByStore.size > 0) ||
+                        (offlinePlannedByStore && offlinePlannedByStore.size > 0)
+                    ) {
+                        applyInternetReportAdjustmentsToOfflineRows(
+                            sortedData,
+                            offlinePowerOutageByStore,
+                            offlinePlannedByStore,
+                            bounds.fromMs,
+                            bounds.toMs,
+                            OFFLINE_UPTIME_SCHEDULE,
+                            {
+                                scheduledMinutesInRange,
+                                extractStoreCode,
+                                lookupOntForOfflineStore,
+                                ontByStore: ontByStoreCsv
+                            }
+                        );
+                    }
                     const S = scheduledMinutesInRange(bounds.fromMs, bounds.toMs, OFFLINE_UPTIME_SCHEDULE);
                     let sumPd = 0;
                     let sumBd = 0;
@@ -3207,9 +3525,12 @@
                                 : 0;
                         }
                         nInt++;
-                        sumId += row.internetDownScheduled != null && Number.isFinite(row.internetDownScheduled)
-                            ? Math.max(0, row.internetDownScheduled)
-                            : 0;
+                        const idEff = row.internetDownEffective != null && Number.isFinite(row.internetDownEffective)
+                            ? Math.max(0, row.internetDownEffective)
+                            : (row.internetDownScheduled != null && Number.isFinite(row.internetDownScheduled)
+                                ? Math.max(0, row.internetDownScheduled)
+                                : 0);
+                        sumId += idEff;
                     });
                     if (S > 0 && nPrim > 0) {
                         totals.primaryUptimePct = ((nPrim * S - sumPd) / (nPrim * S)) * 100;
@@ -4442,7 +4763,7 @@
                     }
                 }
 
-                /** Save visible: require CRM URL + tag unless clearing an existing ticket (delete). */
+                /** Save visible: require CRM URL + tag unless tag-only internet report or clearing ticket. */
                 function updatePcTicketSaveButtonState(htmlNode) {
                     const saveBtn = htmlNode.getElementById('pc-ticket-save-btn');
                     const inputEl = htmlNode.getElementById('pc-ticket-link-input');
@@ -4459,12 +4780,23 @@
                     const link = inputEl.value.trim();
                     const tag = normalizeReportTag(tagEl ? tagEl.value : '');
                     const originalLink = String(inputEl.getAttribute('data-original-link') || '').trim();
+                    const deviceType = inputEl.getAttribute('data-ticket-device-type') || currentDeviceType;
+                    const deviceName = inputEl.getAttribute('data-device-name') || '';
+                    const tagAllowsNoTicket =
+                        typeof internetReportTagAllowsNoTicket === 'function' &&
+                        internetReportTagAllowsNoTicket(tag) &&
+                        typeof isInternetIssueType === 'function' &&
+                        isInternetIssueType(deviceType, deviceName);
                     if (!link && originalLink) {
                         saveBtn.disabled = false;
                         return;
                     }
-                    if (!link || !tag) {
+                    if (!tag) {
                         saveBtn.disabled = true;
+                        return;
+                    }
+                    if (!link) {
+                        saveBtn.disabled = !tagAllowsNoTicket;
                         return;
                     }
                     if (!isValidTicketUrl(link)) {
@@ -4593,7 +4925,14 @@
                         tagEl.value = currentTag;
                         rebuildPcTicketTagMenu(htmlNode, tags);
                     }
-                    const isReported = !!currentLink;
+                    const isTagOnlyReported =
+                        !currentLink &&
+                        typeof internetReportTagAllowsNoTicket === 'function' &&
+                        internetReportTagAllowsNoTicket(currentTag) &&
+                        typeof isInternetIssueType === 'function' &&
+                        isInternetIssueType(effectiveDeviceType, resolvedDeviceName) &&
+                        (!!String(options.reportedAt || '').trim() || !!normalizeReportTag(prefillTag));
+                    const isReported = !!currentLink || isTagOnlyReported;
                     if (ownerValueEl) {
                         ownerValueEl.textContent = ownerDisplayName(ownerName, isReported ? '—' : '-');
                     }
@@ -4879,6 +5218,8 @@
                             const key = normalizeDeviceKey(deviceName);
                             const link = inputEl.value.trim();
                             const reportTag = normalizeReportTag(tagEl ? tagEl.value : '');
+                            const originalLink = String(inputEl.getAttribute('data-original-link') || '').trim();
+                            const ticketDeviceType = inputEl.getAttribute('data-ticket-device-type') || currentDeviceType;
                             const actorName = detectLoggedInActor();
                             currentTicketActor = actorName;
 
@@ -4888,20 +5229,29 @@
                                 return;
                             }
                             if (!link) {
-                                if (!(await confirmDeleteReportDialog(htmlNode))) return;
-                                try {
-                                    await deleteDeviceTicketLinkFromBackend(deviceName);
-                                    delete deviceTicketLinks[key];
-                                    showToast(`Ticket link removed for ${formatDeviceToastLabel(deviceName)}`, 'info');
-                                    closeModal();
-                                    return;
-                                } catch (error) {
-                                    showToast(`Delete failed: ${error.message}`, 'error');
+                                if (originalLink) {
+                                    if (!(await confirmDeleteReportDialog(htmlNode))) return;
+                                    try {
+                                        await deleteDeviceTicketLinkFromBackend(deviceName);
+                                        delete deviceTicketLinks[key];
+                                        showToast(`Ticket link removed for ${formatDeviceToastLabel(deviceName)}`, 'info');
+                                        closeModal();
+                                        return;
+                                    } catch (error) {
+                                        showToast(`Delete failed: ${error.message}`, 'error');
+                                        return;
+                                    }
+                                }
+                                const tagAllowsNoTicket =
+                                    typeof internetReportTagAllowsNoTicket === 'function' &&
+                                    internetReportTagAllowsNoTicket(reportTag) &&
+                                    typeof isInternetIssueType === 'function' &&
+                                    isInternetIssueType(ticketDeviceType, deviceName);
+                                if (!tagAllowsNoTicket) {
+                                    showToast('CRM ticket link is required for this tag', 'warning');
                                     return;
                                 }
-                            }
-
-                            if (!isValidTicketUrl(link)) {
+                            } else if (!isValidTicketUrl(link)) {
                                 showToast('Use a HTTPS CRM URL starting with https://crm.avroraro.lan/workgroups/group/', 'warning');
                                 return;
                             }
@@ -4911,7 +5261,6 @@
                             }
 
                             try {
-                                const ticketDeviceType = inputEl.getAttribute('data-ticket-device-type') || currentDeviceType;
                                 const reportSource = String(inputEl.getAttribute('data-report-source') || '').toLowerCase();
                                 // Non Internet Issue rows live only in crm_device_tickets; linking would
                                 // create a device_incidents row and duplicate them in Live / reporting.
@@ -5215,22 +5564,69 @@
                 function buildOfflineStoreData() {
                     const mod = window.GFN_RENDER_OFFLINE;
                     if (!mod) return [];
-                    return mod.buildOfflineStoreData(offlineReportData);
+                    return mod.buildOfflineStoreData(offlineReportData, dataMap);
+                }
+
+                async function refreshOfflineInternetReportCaches() {
+                    const bounds = getEffectiveRangeBounds();
+                    const rangeKey = `${Math.floor(bounds.fromMs)}_${Math.floor(bounds.toMs)}`;
+                    const token = ++offlineInternetReportFetchToken;
+                    const spanMs = Math.max(0, Number(bounds.toMs || 0) - Number(bounds.fromMs || 0));
+                    const days = Math.max(1, Math.ceil(spanMs / (1000 * 60 * 60 * 24)));
+                    const rangeQuery = `days=${days}&from_ms=${Math.floor(bounds.fromMs)}&to_ms=${Math.floor(bounds.toMs)}`;
+                    try {
+                        const [poRes, plannedRes] = await Promise.all([
+                            apiRequest(`/reporting/internet-power-outage?${rangeQuery}`),
+                            apiRequest(`/reporting/internet-power-outage?${rangeQuery}&tag=planned`)
+                        ]);
+                        if (token !== offlineInternetReportFetchToken) {
+                            return { powerOutageByStore: offlinePowerOutageByStore, plannedByStore: offlinePlannedByStore };
+                        }
+                        const poRows = Array.isArray(poRes?.rows) ? poRes.rows : [];
+                        const plannedRows = Array.isArray(plannedRes?.rows) ? plannedRes.rows : [];
+                        offlinePowerOutageByStore = buildPowerOutageMinutesByStore(
+                            poRows,
+                            bounds.fromMs,
+                            bounds.toMs,
+                            OFFLINE_UPTIME_SCHEDULE,
+                            scheduledMinutesInRange
+                        );
+                        offlinePlannedByStore = buildPlannedMinutesByStore(
+                            plannedRows,
+                            bounds.fromMs,
+                            bounds.toMs,
+                            OFFLINE_UPTIME_SCHEDULE,
+                            scheduledMinutesInRange
+                        );
+                        offlineInternetReportRangeKey = rangeKey;
+                    } catch (err) {
+                        console.warn('[Offline Time Report] internet report fetch failed', err);
+                    }
+                    return { powerOutageByStore: offlinePowerOutageByStore, plannedByStore: offlinePlannedByStore };
                 }
 
                 function renderOfflineTable(htmlNode) {
                     const mod = window.GFN_RENDER_OFFLINE;
                     if (!mod) return;
-                    mod.renderOfflineTable(htmlNode, {
-                        offlineReportData,
-                        searchQuery,
-                        sortColumn: offlineSortColumn,
-                        sortDirection: offlineSortDirection,
-                        sortMode: offlineSortMode,
-                        latestGrafanaData,
-                        dataMap,
-                        getEffectiveRangeBounds
-                    });
+                    const paint = () => {
+                        mod.renderOfflineTable(htmlNode, {
+                            offlineReportData,
+                            searchQuery,
+                            sortColumn: offlineSortColumn,
+                            sortDirection: offlineSortDirection,
+                            sortMode: offlineSortMode,
+                            latestGrafanaData,
+                            dataMap,
+                            getEffectiveRangeBounds,
+                            powerOutageByStore: offlinePowerOutageByStore,
+                            plannedByStore: offlinePlannedByStore
+                        });
+                    };
+                    paint();
+                    refreshOfflineInternetReportCaches().then(() => {
+                        if (!isOfflineViewActive) return;
+                        paint();
+                    }).catch(() => {});
                 }
 
                 function setupOfflineTableHeaderSorting(htmlNode) {
@@ -5538,7 +5934,9 @@
                 }
 
                 function renderUnreportedLiveCards(htmlNode, rows, reportedRowsFromDb = [], solvedRowsFromDb = []) {
-                    const grid = htmlNode.getElementById('stores-grid');
+                    const grid = htmlNode && htmlNode.id === 'stores-grid'
+                        ? htmlNode
+                        : htmlNode.getElementById('stores-grid');
                     if (!grid) return;
                     // Keep the Incidents grid in its dedicated styling mode on
                     // every render path, including the 30 s auto-refresh and
@@ -5583,9 +5981,11 @@
                         fpList(rows),
                         fpList(reportedRowsFromDb),
                         fpList(solvedRowsFromDb),
-                        liveUnreportedDurationSort || '',
-                        liveUnreportedStatusCycleValueLabel ? liveUnreportedStatusCycleValueLabel() : '',
-                        fpNightCtx.inMonitoringWindow ? 'day' : 'night'
+                        liveUnreportedStatusFilter || '',
+                        fpNightCtx.inMonitoringWindow ? 'day' : 'night',
+                        _LIF.fingerprintSectionState ? _LIF.fingerprintSectionState(liveIncidentSectionFilters.unreported) : '',
+                        _LIF.fingerprintSectionState ? _LIF.fingerprintSectionState(liveIncidentSectionFilters.reported) : '',
+                        _LIF.fingerprintSectionState ? _LIF.fingerprintSectionState(liveIncidentSectionFilters.solved) : ''
                     ].join('||');
                     if (grid.dataset.fingerprint === fingerprint) {
                         // Same data as last render — keep DOM intact.
@@ -5594,23 +5994,19 @@
                     grid.dataset.fingerprint = fingerprint;
                     grid.classList.remove('grouped-sections--switches', 'grouped-sections--cash', 'grouped-sections--music');
                     const base = Array.isArray(rows) ? rows : [];
-                    let list = filteredLiveUnreportedList(base);
-                    // Pre-compute sort keys ONCE per row instead of inside the
-                    // comparator (called O(N log N) times). For 200 rows that
-                    // means ~1500 fewer Date parses + duration walks per sort.
-                    for (let i = 0; i < list.length; i++) {
-                        const r = list[i];
-                        r.__sortStartMs = toEpochMs(r.offline_started_at) || 0;
-                        if (liveUnreportedDurationSort === 'duration_asc' || liveUnreportedDurationSort === 'duration_desc') {
-                            r.__sortDur = unreportedEffectiveDurationMinutes(r);
-                        }
-                    }
-                    if (liveUnreportedDurationSort === 'duration_asc') {
-                        list.sort((a, b) => (a.__sortDur - b.__sortDur) || (b.__sortStartMs - a.__sortStartMs));
-                    } else if (liveUnreportedDurationSort === 'duration_desc') {
-                        list.sort((a, b) => (b.__sortDur - a.__sortDur) || (b.__sortStartMs - a.__sortStartMs));
-                    } else {
-                        list.sort((a, b) => b.__sortStartMs - a.__sortStartMs);
+                    const listBase = filteredLiveUnreportedList(base);
+                    const filterDeps = liveIncidentFilterDeps();
+                    let list = _LIF.applyFiltersAndSort
+                        ? _LIF.applyFiltersAndSort(listBase, 'unreported', liveIncidentSectionFilters.unreported, filterDeps)
+                        : listBase.slice();
+                    const hasSectionSort = liveIncidentSectionFilters.unreported && (
+                        liveIncidentSectionFilters.unreported.storeOrder ||
+                        liveIncidentSectionFilters.unreported.startOrder ||
+                        liveIncidentSectionFilters.unreported.endOrder ||
+                        liveIncidentSectionFilters.unreported.durationOrder
+                    );
+                    if (!hasSectionSort) {
+                        list.sort((a, b) => (liveIncidentUnreportedStartMs(b) - liveIncidentUnreportedStartMs(a)));
                     }
                     const reportable = new Set(REPORTABLE_DEVICE_TYPES);
                     const renderIncidentCard = (row, isReportedCard = false) => {
@@ -5667,8 +6063,8 @@
                     // three sections so toggling a category (e.g. Music) hides
                     // non-matching cards in Reported and Solved too, not only
                     // in the Unreported list.
-                    const reportedRowsFiltered = filteredLiveReportedSolvedList(reportedRowsFromDb, 'reported');
-                    const solvedRowsFiltered = filteredLiveReportedSolvedList(solvedRowsFromDb, 'solved');
+                    const reportedRowsFilteredBase = filteredLiveReportedSolvedList(reportedRowsFromDb, 'reported');
+                    const solvedRowsFilteredBase = filteredLiveReportedSolvedList(solvedRowsFromDb, 'solved');
                     // Hold "Solved" rows that closed during the current
                     // monitoring-paused window (~21:00 → 07:10
                     // Europe/Bucharest) back in Reported. Prometheus stops
@@ -5679,15 +6075,21 @@
                     const heldFromSolved = [];
                     const trulySolvedRows = [];
                     const nowForHold = new Date();
-                    for (const row of solvedRowsFiltered) {
+                    for (const row of solvedRowsFilteredBase) {
                         if (shouldHoldSolvedRowAsReported(row, nowForHold)) {
                             heldFromSolved.push(Object.assign({}, row, { __heldFromSolved: true }));
                         } else {
                             trulySolvedRows.push(row);
                         }
                     }
-                    const reportedRows = reportedRowsFiltered.concat(heldFromSolved);
-                    const solvedRows = trulySolvedRows;
+                    const reportedRowsBase = reportedRowsFilteredBase.concat(heldFromSolved);
+                    const solvedRowsBase = trulySolvedRows;
+                    const reportedRows = _LIF.applyFiltersAndSort
+                        ? _LIF.applyFiltersAndSort(reportedRowsBase, 'reported', liveIncidentSectionFilters.reported, filterDeps)
+                        : reportedRowsBase.slice();
+                    const solvedRows = _LIF.applyFiltersAndSort
+                        ? _LIF.applyFiltersAndSort(solvedRowsBase, 'solved', liveIncidentSectionFilters.solved, filterDeps)
+                        : solvedRowsBase.slice();
                     // Keep Non Reported list aligned with the same incident set used by the
                     // UNREPORTED KPI/table to avoid count mismatches between views.
                     const nonReportedRows = list.slice();
@@ -5827,14 +6229,14 @@
                     // Excel-style column headers per list. Same 5-column grid
                     // template is mirrored in css/shell.css so each header cell
                     // lines up with the corresponding data cell on every card.
-                    const incidentListHeader = (cols) => `
-                        <div class="incident-list-header" role="row" aria-hidden="true">
-                            ${cols.map((c) => `<span class="incident-list-header-cell" role="columnheader">${c}</span>`).join('')}
-                        </div>
-                    `;
-                    const headerUnreported = incidentListHeader(['Store', 'Device', 'Start', 'End', 'Duration']);
-                    const headerReported = incidentListHeader(['Store', 'Device', 'Start', 'End', 'Duration', 'Reported', 'Owner', 'Type', 'Tag', 'Ticket']);
-                    const headerSolved = incidentListHeader(['Store', 'Device', 'Start', 'End', 'Duration', 'Reported', 'Solved', 'Owner', 'Type', 'Tag', 'Ticket']);
+                    const incidentListHeader = (sectionId, sectionKind, baseRows, state) => (
+                        _LIF.buildSectionHeader
+                            ? _LIF.buildSectionHeader(sectionId, sectionKind, baseRows, state, filterDeps)
+                            : ''
+                    );
+                    const headerUnreported = incidentListHeader('unreported', 'unreported', listBase, liveIncidentSectionFilters.unreported);
+                    const headerReported = incidentListHeader('reported', 'reported', reportedRowsBase, liveIncidentSectionFilters.reported);
+                    const headerSolved = incidentListHeader('solved', 'solved', solvedRowsBase, liveIncidentSectionFilters.solved);
 
                     grid.classList.add('stores-grid--unreported', 'grouped-sections');
                     grid.innerHTML = `
@@ -5867,6 +6269,8 @@
                         </section>
                     `;
                     ensureIncidentSectionTogglesDelegation(grid);
+                    ensureLiveIncidentSectionFiltersDelegation(grid);
+                    if (_LIF.decorateFilterSummaries) _LIF.decorateFilterSummaries(grid);
                     updateUnreportedLiveStatistics(htmlNode, list);
                     syncLiveUnreportedDeviceFilterUI(htmlNode);
                 }
@@ -6042,8 +6446,15 @@
 
                     // Sort
                     const sortedDevices = allDevices.slice();
+                    const routerPriorityRank = (_PS.getRouterLivePriorityRank || function () { return 99; });
                     if (currentSortMode === 'alphabetic') {
                         sortedDevices.sort((a, b) => a.name.localeCompare(b.name));
+                    } else if (currentDeviceType === 'routers') {
+                        sortedDevices.sort((a, b) => {
+                            const ordA = routerPriorityRank(a, PRIORITY_ORDER);
+                            const ordB = routerPriorityRank(b, PRIORITY_ORDER);
+                            return ordA !== ordB ? ordA - ordB : a.name.localeCompare(b.name);
+                        });
                     } else {
                         sortedDevices.sort((a, b) => {
                             const ordA = PRIORITY_ORDER[a.status] || 99;
@@ -6057,6 +6468,9 @@
                     // and rebuilding the grid, which causes the flicker.
                     const cardsFp = sortedDevices.map((d) =>
                         (d.name || '') + '|' + (d.status || '') + '|' +
+                        (currentDeviceType === 'routers' && currentSortMode === 'priority'
+                            ? (d.ontPrimaryStatus || '') + '|' + (d.ontBackupStatus || '') + '|'
+                            : '') +
                         (d.uptimePercent != null ? d.uptimePercent : '') + '|' +
                         (d.lastSeen || '')
                     ).join(';');
@@ -6887,7 +7301,21 @@
                 // 5. MAIN VIEW UPDATE
                 // ============================================================================
 
+                function markPanelReady(htmlNode) {
+                    try {
+                        const root = htmlNode && htmlNode.documentElement
+                            ? htmlNode.documentElement
+                            : document.documentElement;
+                        root.classList.add('gfn-panel-ready');
+                        const VS = window.GFN_VIEW_STATE;
+                        if (VS && typeof VS.getState === 'function' && typeof VS.syncHtmlAttributes === 'function') {
+                            VS.syncHtmlAttributes(VS.getState());
+                        }
+                    } catch (_e) { /* ignore */ }
+                }
+
                 function updateMainView(htmlNode) {
+                    markPanelReady(htmlNode);
                     const tableContainer = htmlNode.getElementById('offline-time-table-container');
                     const grid = htmlNode.getElementById('stores-grid');
                     const offlineBtn = htmlNode.getElementById('offline-time-button');
@@ -6952,11 +7380,16 @@
                     if (showRouterTimelinePage) {
                         if (nonInternetIssueBtn) nonInternetIssueBtn.style.display = 'none';
                         try {
-                            if (window.GFN_ROUTER_TIMELINE && typeof window.GFN_ROUTER_TIMELINE.init === 'function') {
-                                window.GFN_ROUTER_TIMELINE.init(htmlNode);
+                            const rt = window.GFN_ROUTER_TIMELINE;
+                            if (rt) {
+                                if (typeof rt.isMounted === 'function' && rt.isMounted() && typeof rt.refresh === 'function') {
+                                    rt.refresh(htmlNode);
+                                } else if (typeof rt.init === 'function') {
+                                    rt.init(htmlNode);
+                                }
                             }
                         } catch (err) {
-                            console.warn('[Device Monitor] Router Timeline init failed', err);
+                            console.warn('[Device Monitor] Router Timeline refresh failed', err);
                         }
                         return;
                     }
@@ -6987,6 +7420,10 @@
                         showLivePage &&
                         currentDeviceType === 'routers' &&
                         !isOfflineViewActive;
+                    const overviewBand = htmlNode.getElementById('shell-overview-band');
+                    if (overviewBand) {
+                        overviewBand.style.display = isOverviewTotalsContext ? '' : 'none';
+                    }
                     if (!isOverviewTotalsContext) {
                         const totalEl = htmlNode.getElementById('total-stores');
                         const totalLabelEl = htmlNode.getElementById('total-stores-label');
@@ -7048,11 +7485,9 @@
                         if (clearSearchBtn) clearSearchBtn.style.display = 'none';
                         if (tableContainer) tableContainer.classList.remove('visible');
                         if (grid) {
-                            // Clear the `!important` hide flag set by the early branch
-                            // above. Without an explicit reset, the CSS `flex !important`
-                            // for `.grouped-sections` won't be able to override the
-                            // inline `none !important`.
-                            grid.style.setProperty('display', 'grid', '');
+                            // Clear the forced hide from the top of updateMainView so
+                            // stylesheet rules (e.g. grouped-sections flex) can apply.
+                            grid.style.removeProperty('display');
                             const isUnreportedView = currentDeviceType === LIVE_UNREPORTED_DEVICE_TYPE;
                             grid.classList.toggle('stores-grid--unreported', isUnreportedView);
                             // Apply `grouped-sections` together with `stores-grid--unreported`

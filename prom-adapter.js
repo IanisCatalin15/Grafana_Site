@@ -195,19 +195,32 @@
    */
   function resolvePanelRange() {
     const params = new URLSearchParams(window.location.search);
-    const fromParam = params.get('from');
-    const toParam = params.get('to');
+    let fromParam = params.get('from');
+    let toParam = params.get('to');
+
+    if (!fromParam || !toParam) {
+      try {
+        const dr = window.GFN_DATE_RANGE;
+        const saved = dr && typeof dr.readSavedDateFilter === 'function'
+          ? dr.readSavedDateFilter()
+          : null;
+        if (saved && saved.from && saved.to) {
+          fromParam = saved.from;
+          toParam = saved.to;
+        }
+      } catch (_e) { /* ignore */ }
+    }
 
     const now = Date.now();
 
     // Known live tokens (matches TIME_RANGE_LABELS in the panel).
     const LIVE_TOKENS = {
-      'now-3h': 3 * 3600 * 1000,
-      'now-6h': 6 * 3600 * 1000,
       'now-12h': 12 * 3600 * 1000,
       'now-24h': 24 * 3600 * 1000,
       'now-2d': 2 * 86400 * 1000,
-      'now-7d': 7 * 86400 * 1000
+      'now-7d': 7 * 86400 * 1000,
+      'now-30d': 30 * 86400 * 1000,
+      'now-90d': 90 * 86400 * 1000
     };
 
     if (fromParam && toParam) {
@@ -222,8 +235,8 @@
       }
     }
 
-    // Default: Last 6 hours (matches the panel's fallback at line ~8382).
-    return rangeOut(now - 6 * 3600 * 1000, now, true);
+    // Default: Last 12 hours (matches the panel's fallback).
+    return rangeOut(now - 12 * 3600 * 1000, now, true);
   }
 
   function rangeOut(fromMs, toMs, isLive) {
@@ -271,13 +284,17 @@
     const url = `${PROM_BASE}/query?query=${encodeURIComponent(expr)}&time=${(atMs / 1000).toFixed(3)}`;
     let response;
     try {
-      response = await fetch(url, { credentials: 'same-origin', cache: 'no-store' });
+      // `include` sends HTTP Basic Auth on ia.aurora.direct after browser login.
+      response = await fetch(url, { credentials: 'include', cache: 'no-store' });
     } catch (err) {
       console.warn('[prom-adapter] fetch failed for', expr.slice(0, 80), err);
       return [];
     }
     if (!response.ok) {
       console.warn('[prom-adapter] HTTP', response.status, 'for', expr.slice(0, 80));
+      if (response.status === 401) {
+        try { window.__GFN_PROM_AUTH_FAILED__ = true; } catch (_) { /* ignore */ }
+      }
       return [];
     }
     let json;

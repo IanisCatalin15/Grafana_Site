@@ -30,7 +30,7 @@
 
   // Default "live" range used when navigating away from a date-aware view so
   // the Live device grids never get pinned to a historical window.
-  const DEFAULT_LIVE_DATE_FROM = 'now-6h';
+  const DEFAULT_LIVE_DATE_FROM = 'now-12h';
   const DEFAULT_LIVE_DATE_TO = 'now';
 
   // ---- Monitoring window (Europe/Bucharest wall clock) -----------------------
@@ -40,12 +40,12 @@
 
   // ---- Time-range picker labels ---------------------------------------------
   const TIME_RANGE_LABELS = {
-    'now-3h':  { short: '3h',  full: 'Live - Last 3 hours',  isLive: true },
-    'now-6h':  { short: '6h',  full: 'Live - Last 6 hours',  isLive: true },
     'now-12h': { short: '12h', full: 'Live - Last 12 hours', isLive: true },
     'now-24h': { short: '24h', full: 'Live - Last 24 hours', isLive: true },
     'now-2d':  { short: '2d',  full: 'Live - Last 2 days',   isLive: true },
     'now-7d':  { short: '7d',  full: 'Live - Last 7 days',   isLive: true },
+    'now-30d': { short: '30d', full: 'Live - Last 30 days',  isLive: true },
+    'now-90d': { short: '90d', full: 'Live - Last 90 days',  isLive: true },
     'today':     { short: 'Today',     full: 'Today (07:00 - 21:00)',     isLive: false },
     'yesterday': { short: 'Yesterday', full: 'Yesterday (07:00 - 21:00)', isLive: false }
   };
@@ -68,6 +68,7 @@
 
   // ---- Report tags (CRM) -----------------------------------------------------
   const INTERNET_REPORT_TAGS = ['power-outage', 'network-issue', 'planned'];
+  const INTERNET_REPORT_TAGS_NO_TICKET_REQUIRED = ['power-outage', 'planned'];
   const DEVICE_REPORT_TAGS = ['troubleshooting', 'partial-replacement', 'full-replacement'];
   const LIVE_INCIDENT_TAG_FILTER_IDS = [
     'power-outage',
@@ -127,6 +128,7 @@
     TIME_RANGE_LABELS,
     DEVICE_PARSERS,
     INTERNET_REPORT_TAGS,
+    INTERNET_REPORT_TAGS_NO_TICKET_REQUIRED,
     DEVICE_REPORT_TAGS,
     LIVE_INCIDENT_TAG_FILTER_IDS,
     REPORTABLE_DEVICE_TYPES,
