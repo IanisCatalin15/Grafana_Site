@@ -72,10 +72,6 @@
     } catch (_e) { /* ignore */ }
   }
 
-  function syncHtmlPageAttribute(page) {
-    syncHtmlAttributes({ page, device: state.device, offline: state.offline });
-  }
-
   function notify() {
     const snapshot = getState();
     subscribers.forEach((fn) => {
@@ -145,7 +141,6 @@
     normalizeDevice,
     normalizePage,
     syncHtmlAttributes,
-    syncHtmlPageAttribute,
     STORAGE_KEY_PAGE,
     STORAGE_KEY_DEVICE,
     STORAGE_KEY_OFFLINE

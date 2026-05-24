@@ -23,15 +23,6 @@
                 const escapeHtml = _U.escapeHtml;
                 const escapeAttr = _U.escapeAttr;
                 const formatTime = _U.formatTime;
-                const formatHoursMinutesOnly = _U.formatHoursMinutesOnly;
-                const offlineInternetUptimeTooltip = _U.offlineInternetUptimeTooltip;
-                const offlineInternetUptimeTooltipTotal = _U.offlineInternetUptimeTooltipTotal;
-                const offlinePrimaryUptimeTooltip = _U.offlinePrimaryUptimeTooltip;
-                const offlinePrimaryUptimeTooltipTotal = _U.offlinePrimaryUptimeTooltipTotal;
-                const offlineBackupUptimeTooltip = _U.offlineBackupUptimeTooltip;
-                const offlineBackupUptimeTooltipTotal = _U.offlineBackupUptimeTooltipTotal;
-                const formatDateTime = _U.formatDateTime;
-                const DTF_COMPACT = _U.DTF_COMPACT;
                 const formatStoreCodeFromInput = _U.formatStoreCodeFromInput;
                 const isManualReportedRow = _U.isManualReportedRow;
                 const formatIsoDateTime = _U.formatIsoDateTime;
@@ -60,19 +51,14 @@
                 const STORAGE_KEY_OFFLINE_SORT_COLUMN = _C.STORAGE_KEY_OFFLINE_SORT_COLUMN;
                 const STORAGE_KEY_OFFLINE_SORT_DIRECTION = _C.STORAGE_KEY_OFFLINE_SORT_DIRECTION;
                 const STORAGE_KEY_DEVICE_STATUS_SNAPSHOT = _C.STORAGE_KEY_DEVICE_STATUS_SNAPSHOT;
-                const STORAGE_KEY_DASHBOARD_PAGE = _C.STORAGE_KEY_DASHBOARD_PAGE;
                 const STORAGE_KEY_PRIMARY_DOWN_SINCE = _C.STORAGE_KEY_PRIMARY_DOWN_SINCE;
                 const STORAGE_KEY_NIGHT_FREEZE_STATE = _C.STORAGE_KEY_NIGHT_FREEZE_STATE;
                 const STORAGE_KEY_LIVE_UNREPORTED_DURATION_SORT = _C.STORAGE_KEY_LIVE_UNREPORTED_DURATION_SORT;
-                const STORAGE_KEY_SAVED_DATE_FILTER = _C.STORAGE_KEY_SAVED_DATE_FILTER;
-                const DEFAULT_LIVE_DATE_FROM = _C.DEFAULT_LIVE_DATE_FROM;
-                const DEFAULT_LIVE_DATE_TO = _C.DEFAULT_LIVE_DATE_TO;
                 const PRIMARY_DOWN_GRACE_MINUTES = _C.PRIMARY_DOWN_GRACE_MINUTES;
                 const MONITORING_START_MINUTES = _C.MONITORING_START_MINUTES;
                 const MONITORING_END_MINUTES = _C.MONITORING_END_MINUTES;
                 const TIME_RANGE_LABELS = _C.TIME_RANGE_LABELS;
                 const DEVICE_PARSERS = _C.DEVICE_PARSERS;
-                const INTERNET_REPORT_TAGS = _C.INTERNET_REPORT_TAGS;
                 const DEVICE_REPORT_TAGS = _C.DEVICE_REPORT_TAGS;
                 const LIVE_INCIDENT_TAG_FILTER_IDS = _C.LIVE_INCIDENT_TAG_FILTER_IDS;
                 const REPORTABLE_DEVICE_TYPES = _C.REPORTABLE_DEVICE_TYPES;
@@ -88,7 +74,6 @@
 
                 // ---- api-base ------------------------------------------------------------
                 const _AB = window.GFN_API_BASE || {};
-                const normalizeApiBase = _AB.normalizeApiBase;
                 const resolveApiBase = _AB.resolveApiBase;
 
                 // ---- device-format -------------------------------------------------------
@@ -135,10 +120,6 @@
                 const getPcOver15DetailData = _PS.getPcOver15DetailData;
                 const getPanelTimeRangeMs = _PS.getPanelTimeRangeMs;
                 const scheduledMinutesInRange = _PS.scheduledMinutesInRange;
-                const formatUptimePercent = _PS.formatUptimePercent;
-                const uptimePercentCellClass = _PS.uptimePercentCellClass;
-                const normalizeOntLookupKey = _PS.normalizeOntLookupKey;
-                const compactOntLookupKey = _PS.compactOntLookupKey;
                 const lookupOntForOfflineStore = _PS.lookupOntForOfflineStore;
                 const applyInternetUptimeToOfflineRows = _PS.applyInternetUptimeToOfflineRows;
                 const _OPO = window.GFN_OFFLINE_POWER_OUTAGE || {};
@@ -173,14 +154,11 @@
                 // ---- incident-dedup ------------------------------------------------------
                 const _ID = window.GFN_INCIDENT_DEDUP || {};
                 const WAN_DEPENDENT_RECOVERY_GRACE_MS = _ID.WAN_DEPENDENT_RECOVERY_GRACE_MS;
-                const PRIMARY_DOWN_BACKUP_UP_ALERT = _ID.PRIMARY_DOWN_BACKUP_UP_ALERT;
                 const STORE_WAN_BLACKOUT_ALERT = _ID.STORE_WAN_BLACKOUT_ALERT;
                 const CASCADE_DEPENDENT_TYPES = _ID.CASCADE_DEPENDENT_TYPES;
                 const UNREPORTED_DEVICE_GROUP_TYPES = _ID.UNREPORTED_DEVICE_GROUP_TYPES;
                 const UNREPORTED_DEVICE_GROUP_IDS = _ID.UNREPORTED_DEVICE_GROUP_IDS;
-                const DEVICE_TYPE_TO_GROUP_ID = _ID.DEVICE_TYPE_TO_GROUP_ID;
                 const LIVE_GROUPED_DEVICE_TYPES = _ID.LIVE_GROUPED_DEVICE_TYPES;
-                const LIVE_UNREPORTED_DEDUP_OFFLINE_START_ALIGN_MS = _ID.LIVE_UNREPORTED_DEDUP_OFFLINE_START_ALIGN_MS;
                 const incidentRowDeviceType = _ID.incidentRowDeviceType;
                 const deviceGroupIdForType = _ID.deviceGroupIdForType;
                 const countRowsForDeviceGroup = _ID.countRowsForDeviceGroup;
@@ -6270,7 +6248,6 @@
                     `;
                     ensureIncidentSectionTogglesDelegation(grid);
                     ensureLiveIncidentSectionFiltersDelegation(grid);
-                    if (_LIF.decorateFilterSummaries) _LIF.decorateFilterSummaries(grid);
                     updateUnreportedLiveStatistics(htmlNode, list);
                     syncLiveUnreportedDeviceFilterUI(htmlNode);
                 }

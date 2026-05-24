@@ -20,19 +20,6 @@
 (function () {
   'use strict';
 
-  const _C = window.GFN_CONSTANTS || {};
-  const LIVE_UNREPORTED_DEVICE_TYPE = _C.LIVE_UNREPORTED_DEVICE_TYPE || 'unreported';
-
-  function isLiveIncidentsView() {
-    const VS = window.GFN_VIEW_STATE;
-    if (!VS || !VS.getState) return false;
-    const s = VS.getState();
-    if (s.page !== 'live') return false;
-    if (s.device !== LIVE_UNREPORTED_DEVICE_TYPE) return false;
-    if (s.offline) return false;
-    return true;
-  }
-
   function installRefreshTrigger(fn) {
     window.__GFN_LIVE_TRIG__ = typeof fn === 'function' ? fn : null;
   }
@@ -243,7 +230,6 @@
   window.GFN_LIVE_REFRESH = {
     installRefreshTrigger,
     startLiveAutoRefresh,
-    startKioskHealthGuard,
-    isLiveIncidentsView
+    startKioskHealthGuard
   };
 })();

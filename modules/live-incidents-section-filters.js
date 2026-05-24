@@ -473,39 +473,6 @@
     return out;
   }
 
-  function readStateFromDom(sectionId, headerEl, prevState) {
-    const s = cloneSectionState(prevState);
-    if (!headerEl) return s;
-
-    headerEl.querySelectorAll(`.live-inc-sort-btn[data-section="${sectionId}"]`).forEach((btn) => {
-      const key = btn.getAttribute('data-sort-key');
-      const sym = btn.querySelector('.analytics-th-sort-symbol');
-      const txt = sym ? sym.textContent.trim() : '';
-      const ord = txt === '\u2191' ? 'asc' : txt === '\u2193' ? 'desc' : '';
-      if (key === 'store') s.storeOrder = ord;
-      else if (key === 'start') s.startOrder = ord;
-      else if (key === 'end') s.endOrder = ord;
-      else if (key === 'duration') s.durationOrder = ord;
-      else if (key === 'reported') s.reportedOrder = ord;
-      else if (key === 'solved') s.solvedOrder = ord;
-    });
-
-    const typeSym = headerEl.querySelector(`.live-inc-type-btn[data-section="${sectionId}"] .analytics-th-sort-symbol`);
-    if (typeSym) {
-      const t = typeSym.textContent.trim();
-      if (t === 'Internet') s.typeFilter = 'internet';
-      else if (t === 'Non Internet') s.typeFilter = 'non_internet';
-      else s.typeFilter = 'all';
-    }
-
-    const ticketInput = headerEl.querySelector(`.live-inc-ticket-input[data-section="${sectionId}"]`);
-    if (ticketInput) {
-      s.ticketQuery = String(ticketInput.value || '').replace(/\D/g, '');
-    }
-
-    return s;
-  }
-
   function updateStateFromCheckboxChange(sectionId, state, target) {
     const s = cloneSectionState(state);
     if (!target) return s;
@@ -613,10 +580,6 @@
     return s;
   }
 
-  function decorateFilterSummaries(_root) {
-    /* Icons are inlined in header HTML — no runtime SVG injection. */
-  }
-
   window.GFN_LIVE_INCIDENT_FILTERS = {
     DEVICE_GROUP_LABELS,
     STORAGE_KEY,
@@ -630,9 +593,7 @@
     fingerprintSectionState,
     buildSectionHeader,
     applyFiltersAndSort,
-    readStateFromDom,
     updateStateFromCheckboxChange,
-    decorateFilterSummaries,
     cycleSort,
     cycleTypeFilter,
     sortSymbol,

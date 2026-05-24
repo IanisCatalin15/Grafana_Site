@@ -271,21 +271,6 @@
         return normalizeUsername(comment) === myDisplay;
     }
 
-    function canEditReportDescription(report) {
-        if (!report || typeof report !== 'object') return false;
-        const myLogin = normalizeAccessUsername(grafanaUserLogin);
-        const reportLogin = normalizeAccessUsername(report.userLogin || report.login || report.username || '');
-        if (myLogin && reportLogin) return myLogin === reportLogin;
-        const myDisplay = normalizeAccessUsername(grafanaDisplayName);
-        const reportDisplay = normalizeAccessUsername(report.user || report.reporter || report.author || '');
-        return !!myDisplay && !!reportDisplay && myDisplay === reportDisplay;
-    }
-
-    function canModifyReport(report) {
-        // Anyone can modify in localStorage-only mode (single browser).
-        return true;
-    }
-
     function getReporterDisplayName() {
         const display = normalizeUsername(grafanaDisplayName);
         if (display && display.toLowerCase() !== 'unknown user') return display;
@@ -526,17 +511,6 @@
 
     function countTotalComments(comments) {
         return normalizeComments(comments).length;
-    }
-
-    function getPanelTimeRange(data) {
-        const fromRaw = data && data.request && data.request.range && data.request.range.from;
-        const toRaw = data && data.request && data.request.range && data.request.range.to;
-        const from = fromRaw ? (typeof fromRaw.valueOf === 'function' ? fromRaw.valueOf() : new Date(fromRaw).getTime()) : null;
-        const to = toRaw ? (typeof toRaw.valueOf === 'function' ? toRaw.valueOf() : new Date(toRaw).getTime()) : null;
-        return {
-            from: Number.isFinite(from) ? from : null,
-            to: Number.isFinite(to) ? to : null
-        };
     }
 
     function normalizeReportRecord(r) {
