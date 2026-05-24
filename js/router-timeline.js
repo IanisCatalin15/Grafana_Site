@@ -1914,26 +1914,23 @@
         list.innerHTML = filtered.map((report) => {
             const statusClass = report.resolved ? 'resolved' : 'active';
             const statusLabel = reportStatusLabel(report);
-            const updatesCount = countTotalComments(report.comments);
-            const updatesLabel = updatesCount > 0 ? `Updates (${updatesCount})` : 'Updates';
             return `
                 <div class="incident-card ${statusClass}" data-id="${report.id}">
                     <div class="incident-head">
                         <div class="incident-meta">
                             <span class="incident-store">${escapeHtml(getLocationNumber(report.store || ''))}</span>
                             <span class="incident-category">${escapeHtml(report.deviceType || report.device || '')}</span>
-                            <span class="incident-status ${statusClass}">${statusLabel}</span>
+                            <span class="incident-status ${statusClass}">${escapeHtml(statusLabel)}</span>
                         </div>
-                        <div class="incident-time">${escapeHtml(timeAgo(new Date(report.timestamp)))}</div>
+                        <span class="incident-time">${escapeHtml(timeAgo(new Date(report.timestamp)))}</span>
                     </div>
-                    <div class="incident-main">
+                    <div class="incident-body">
                         <div class="incident-desc">${escapeHtml(report.description || '')}</div>
-                        <div class="incident-actions">
-                            <button type="button" class="incident-action danger" data-action="delete" data-id="${report.id}">Delete</button>
-                            <button type="button" class="incident-action incident-comments-badge" data-action="updated" data-id="${report.id}">${updatesLabel}</button>
-                        </div>
+                        <button type="button" class="incident-action incident-comments-badge" data-action="updated" data-id="${report.id}">Updates</button>
                     </div>
-                    <div class="incident-user">${escapeHtml(report.user || report.reporter || 'Unknown User')} · ${escapeHtml(formatDateTime(new Date(report.timestamp)))}</div>
+                    <div class="incident-foot">
+                        <span class="incident-user">${escapeHtml(report.user || report.reporter || 'Unknown User')} · ${escapeHtml(formatDateTime(new Date(report.timestamp)))}</span>
+                    </div>
                 </div>
             `;
         }).join('');
@@ -1948,14 +1945,6 @@
                 const currentReport = (moduleState.reportsCache || []).find((r) => r.id === id);
                 if (!currentReport) { showToast('Report not found', 'warning'); return; }
                 try {
-                    if (action === 'delete') {
-                        const ok = await openConfirmModal('Do you want to delete this report? This action cannot be undone.');
-                        if (!ok) return;
-                        await deleteReport(id);
-                        showToast('Report deleted', 'success');
-                        refreshAllViews(htmlNode, data);
-                        return;
-                    }
                     if (action === 'updated') {
                         const commentsCount = countTotalComments(currentReport.comments);
                         if (commentsCount === 0) {
